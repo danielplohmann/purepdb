@@ -31,6 +31,13 @@ agrees on those. Structure names that appear here (`PublicsStreamHeader`,
 `IMAGE_SECTION_HEADER`) are the formats' own nomenclature, kept so the code can
 be read alongside the documentation.
 
+A note for future contributors: each module's docstring cites the format
+documentation it was written from, and deliberately does not describe this work
+as a port of another implementation. If you extend purepdb by consulting another
+project's *source* rather than the published format documentation, that is a
+different situation from the one described above, and this file has to change
+with it.
+
 Prior art
 ---------
 

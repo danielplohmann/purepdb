@@ -183,6 +183,25 @@ def test_unflagged_code_publics_are_real_functions():
         assert section is not None and section.executable
 
 
+def test_publics_past_the_last_section_are_cfg_metadata():
+    """A segment one past the last section is legitimate, not corruption.
+
+    MSVC puts Control Flow Guard load-config symbols there. They must resolve to
+    no RVA and must never reach `functions()`, which is what makes it safe for
+    `to_rva()` to answer None instead of raising.
+    """
+    pdb, _image = _load("sqlite/x86/sqlite3.pdb", "sqlite/x86/sqlite3.dll")
+    beyond = len(pdb.sections) + 1
+    stray = [p for p in pdb.public_symbols() if p.segment == beyond]
+
+    assert stray, "expected CFG metadata publics past the last section"
+    assert {p.name for p in stray} >= {"___guard_fids_table", "___guard_flags"}
+    for p in stray:
+        assert not p.is_function
+        assert pdb._rva(p.segment, p.offset) is None
+    assert all(f.rva is not None for f in pdb.functions())
+
+
 def test_publics_carry_the_decorated_name():
     """On x86 cdecl the public keeps the leading underscore the proc drops.
 

@@ -72,8 +72,15 @@ class SectionTable:
     def to_rva(self, segment: int, offset: int) -> int | None:
         """Resolve a 1-based segment + offset to an image RVA.
 
-        Returns None if the segment index is out of range (e.g. absolute
-        symbols use segment 0)."""
+        Returns None when the segment index names no section, which happens for
+        real symbols and is not an error:
+
+          * segment 0 is used for absolute symbols;
+          * segment `len(sections) + 1` carries Control Flow Guard load-config
+            metadata (`__guard_fids_table`, `__guard_flags`, `__safe_se_handler_count`).
+            MSVC emits a handful of these per image. None are function-flagged,
+            so `functions()` is unaffected.
+        """
         if segment < 1 or segment > len(self.sections):
             return None
         return self.sections[segment - 1].virtual_address + offset
