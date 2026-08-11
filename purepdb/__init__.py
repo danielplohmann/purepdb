@@ -15,7 +15,7 @@ from .codeview import DataSymbol, ProcSymbol, PublicSymbol
 from .gsi import PublicsStream
 from .sections import Section, SectionTable
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.2.0"
 
 __all__ = [
     "PDB",

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "purepdb"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "A minimal, dependency-free pure-Python parser for Microsoft PDB debug-info files"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,22 +13,42 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Daniel Plohmann", email = "daniel.plohmann@fkie.fraunhofer.de" }]
 keywords = ["pdb", "codeview", "msf", "debug-info", "reverse-engineering"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    # No "License ::" classifier: PEP 639 deprecates them, and PyPI rejects an
+    # upload that carries both a License-Expression and a license classifier.
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Software Development :: Debuggers",
+    "Topic :: Software Development :: Disassemblers",
     "Topic :: Security",
+    "Typing :: Typed",
 ]
 dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/danielplohmann/purepdb"
+Repository = "https://github.com/danielplohmann/purepdb"
+Issues = "https://github.com/danielplohmann/purepdb/issues"
 
 [project.scripts]
 purepdb = "purepdb.__main__:cli"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = [
+    "build",
+    "hatchling",  # so `make package` can use --no-isolation
+    "pytest>=7",
+    "twine",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["purepdb"]
