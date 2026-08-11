@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "purepdb"
+version = "0.2.0.dev0"
+description = "A minimal, dependency-free pure-Python parser for Microsoft PDB debug-info files"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "BSD-3-Clause"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Daniel Plohmann", email = "daniel.plohmann@fkie.fraunhofer.de" }]
+keywords = ["pdb", "codeview", "msf", "debug-info", "reverse-engineering"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Security",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/danielplohmann/purepdb"
+
+[project.scripts]
+purepdb = "purepdb.__main__:cli"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["purepdb"]
+
+[tool.hatch.build.targets.sdist]
+# The groundtruth fixtures are 12 MB of binaries. They belong in the repository
+# -- the real-PDB tests are the evidence the parser works -- but shipping them
+# to everyone who pip-installs a 40 KB library would be antisocial. Those tests
+# skip when the data is absent, so an sdist build stays fully testable minus
+# that layer. Clone the repo to run it.
+exclude = ["tests/data", "dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

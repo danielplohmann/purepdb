@@ -1,0 +1,57 @@
+purepdb — provenance and prior art
+==================================
+
+purepdb is licensed under the BSD 3-Clause License; see LICENSE.
+
+Provenance
+----------
+
+purepdb is an independent implementation. It contains no code copied or
+mechanically translated from any other project.
+
+The PDB, MSF and CodeView formats are documented publicly, and purepdb was
+written from that documentation:
+
+  * LLVM's PDB File Format documentation, https://llvm.org/docs/PDB/ —
+    prose describing the container, DBI stream, publics/globals streams and
+    CodeView records. LLVM is licensed Apache-2.0 WITH LLVM-exception; its
+    *documentation* was used as a format description, and no LLVM source code
+    was incorporated.
+
+  * Microsoft's own published PDB sources, https://github.com/microsoft/microsoft-pdb
+    (MIT licensed). `cvinfo.h` is the origin of the CodeView record-kind values
+    and record layouts this parser decodes, e.g. `S_PUB32 = 0x110E`.
+
+  * The PE/COFF specification, for `IMAGE_SECTION_HEADER` and the section
+    characteristics used to decide whether an address is code.
+
+What purepdb shares with other parsers of these formats is the formats
+themselves: field order, structure sizes and constant values. Any correct parser
+agrees on those. Structure names that appear here (`PublicsStreamHeader`,
+`IMAGE_SECTION_HEADER`) are the formats' own nomenclature, kept so the code can
+be read alongside the documentation.
+
+Prior art
+---------
+
+Other ways to read a PDB, none of which fit the requirement that motivated this
+one — pure Python, no native dependency, and no heavy dependency chain:
+
+  * llvm-pdbutil (LLVM) — the reference implementation, and the oracle this
+    project validates against. Requires a native toolchain.
+  * LIEF — PDB support is not in the freely available build.
+  * pdbparse — pure Python and still picking up occasional fixes, but
+    its dependency on `construct` has broken across construct releases.
+
+Acknowledgements
+----------------
+
+The bug report that prompted version 0.2.0 — that `public_symbols()` read the
+publics hash stream and so returned nothing on every real PDB — came from a
+downstream consumer's review, along with the measurements over several hundred
+PDBs that showed why publics matter more than their count suggests.
+
+Test fixtures under `tests/data/` are redistributable: sqlite3, whose source is
+public domain, built with MSVC; and a small Rust program of our own, built for
+`x86_64-pc-windows-msvc` and regenerable from the `main.rs` beside it. No
+licensed third-party binaries are redistributed with this project.
