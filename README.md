@@ -73,8 +73,16 @@ is used only for its address map, which supplies address ordering.
 `PUBLIC_FLAG_FUNCTION` on every code public (all 438 of sqlite3 x86's).
 `rust-lld` leaves it clear on 143 of 280, including `mainCRTStartup` and
 `__chkstk`. So a public also counts as a function when it resolves into an
-executable section — worth 36% of the functions in a Rust PE. Pass
-`functions(code_publics=False)` for flag-only behaviour.
+executable section — worth 36% of the functions in a Rust PE.
+
+**This means `functions()` deliberately returns more than the flag alone would.**
+On the Rust fixture, 164 entries are public-sourced while only 142 publics carry
+the function flag. The extra ones are real code — every one resolves inside
+`.text`, verified against the image — but a consumer that previously filtered on
+`PublicSymbol.is_function` will see entries it does not expect. Pass
+`functions(code_publics=False)` for flag-only behaviour, and note that
+`public_symbols()` is unfiltered either way, so `is_function` still means exactly
+what the record says.
 
 ## Scope
 
