@@ -35,7 +35,7 @@ DATA = Path(__file__).resolve().parent / "data"
 # (pdb, image, machine, sections, procs, publics, functions, aliased)
 CASES = [
     pytest.param("sqlite/x86/sqlite3.pdb", "sqlite/x86/sqlite3.dll",
-                 0x014C, 8, 3539, 685, 3620, 357, id="sqlite-x86"),
+                 0x014C, 8, 3539, 685, 3620, 438, id="sqlite-x86"),
     pytest.param("sqlite/x64/sqlite3.pdb", "sqlite/x64/sqlite3.dll",
                  0x8664, 9, 3522, 660, 3601, 13, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb",
@@ -198,7 +198,7 @@ def test_publics_past_the_last_section_are_cfg_metadata():
     assert {p.name for p in stray} >= {"___guard_fids_table", "___guard_flags"}
     for p in stray:
         assert not p.is_function
-        assert pdb._rva(p.segment, p.offset) is None
+        assert pdb.to_rva(p.segment, p.offset) is None
     assert all(f.rva is not None for f in pdb.functions())
 
 

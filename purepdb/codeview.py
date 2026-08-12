@@ -215,6 +215,58 @@ class ProcRef:
         return self.kind == S_PROCREF
 
 
+# THUNK_ORDINAL values, the tag for the variant data after a thunk's name.
+THUNK_NOTYPE = 0
+THUNK_ORDINAL_NAMES = {
+    THUNK_NOTYPE: "notype",
+    1: "adjustor",
+    2: "vcall",
+    3: "pcode",
+    4: "delay-load",
+    5: "delay-load-incremental",
+}
+
+# TRAMP_* values: which flavour of compiler-generated jump this is.
+TRAMP_INCREMENTAL = 0
+TRAMP_BRANCH_ISLAND = 1
+
+
+@dataclass
+class ThunkSymbol:
+    """A named jump stub: an import thunk, an adjustor thunk, a vcall stub.
+
+    Real code with a real name, and on x86 the name here is the *undecorated*
+    one where the public at the same address carries the decoration -- so a
+    thunk record is worth reading even when the address is already known.
+    """
+
+    name: str
+    segment: int   # 1-based section index
+    offset: int    # offset within the section
+    length: int    # size of the thunk in code bytes
+    ordinal: int   # THUNK_ORDINAL: what the variant data after the name is
+
+    @property
+    def ordinal_name(self) -> str:
+        return THUNK_ORDINAL_NAMES.get(self.ordinal, f"{self.ordinal:#04x}")
+
+
+@dataclass
+class Trampoline:
+    """An incremental-link jump stub. Unlike a thunk it carries no name.
+
+    It does carry both ends of the jump, which is what makes it useful: a code
+    range that is not a function, pointing at one that is.
+    """
+
+    kind: int      # TRAMP_INCREMENTAL or TRAMP_BRANCH_ISLAND
+    size: int      # size of the trampoline in code bytes
+    segment: int
+    offset: int
+    target_segment: int
+    target_offset: int
+
+
 @dataclass
 class DataSymbol:
     name: str
@@ -436,6 +488,58 @@ def extract_udts(data: bytes) -> list[UserDefinedType]:
         except EOFError:
             continue
     return out
+
+
+def parse_thunk(payload: bytes) -> ThunkSymbol:
+    r = Reader(payload)
+    r.u32()  # Parent
+    r.u32()  # End
+    r.u32()  # Next
+    offset = r.u32()
+    segment = r.u16()
+    length = r.u16()
+    ordinal = r.u8()
+    name = r.cstring()
+    # Variant data keyed by `ordinal` follows the name; we do not decode it.
+    return ThunkSymbol(name=name, segment=segment, offset=offset,
+                       length=length, ordinal=ordinal)
+
+
+def parse_trampoline(payload: bytes) -> Trampoline:
+    r = Reader(payload)
+    kind = r.u16()
+    size = r.u16()
+    offset = r.u32()
+    target_offset = r.u32()
+    segment = r.u16()
+    target_segment = r.u16()
+    return Trampoline(kind=kind, size=size, segment=segment, offset=offset,
+                      target_segment=target_segment, target_offset=target_offset)
+
+
+def _decoded(parse, records):
+    """Run `parse` over each record, skipping any whose payload is shorter than
+    the kind requires -- RecordLen is the record's own claim, and a short one
+    would otherwise raise out of the public API."""
+    out = []
+    for rec in records:
+        try:
+            out.append(parse(rec.payload))
+        except EOFError:
+            continue
+    return out
+
+
+def extract_thunks(data: bytes) -> list[ThunkSymbol]:
+    """S_THUNK32 records. The scope each opens is closed by a later S_END,
+    which the flat record walk steps over like any other record."""
+    return _decoded(parse_thunk,
+                    (r for r in iter_records(data) if r.kind == S_THUNK32))
+
+
+def extract_trampolines(data: bytes) -> list[Trampoline]:
+    return _decoded(parse_trampoline,
+                    (r for r in iter_records(data) if r.kind == S_TRAMPOLINE))
 
 
 def parse_data(kind: int, payload: bytes) -> DataSymbol:

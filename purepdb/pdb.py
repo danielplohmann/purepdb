@@ -48,6 +48,7 @@ class Function:
     substream: an `.obj` path, a library member, or `Import:foo.dll` for an
     import thunk. None when the PDB has no usable contribution table, or when
     the address falls in a gap between contributions."""
+    source: str  # "proc", "public" or "thunk"
     aliases: list[str] = field(default_factory=list)
     """Other names sharing this entry point, in discovery order.
 
@@ -300,7 +301,12 @@ class PDB:
         return (self._original_sections or self._sections
                 or self._derived_sections)
 
-    def _rva(self, segment: int, offset: int) -> int | None:
+    def to_rva(self, segment: int, offset: int) -> int | None:
+        """Resolve a symbol's 1-based `segment` and `offset` to an image RVA.
+
+        None when the PDB carries no section table, or when the segment names
+        no section -- which happens for real symbols; see `SectionTable.to_rva`.
+        """
         table = self._symbol_sections
         if table is None:
             return None
@@ -315,6 +321,10 @@ class PDB:
         if table is not self._original_sections:
             return rva
         return self._omap.lookup(rva)
+
+    # Retained because this was the internal spelling before `to_rva` was made
+    # public, and both are called from across the package.
+    _rva = to_rva
 
     # -- section contributions ----------------------------------------------
 
@@ -442,6 +452,32 @@ class PDB:
             # a proc we can read.
             return None
 
+    def thunks(self) -> list[codeview.ThunkSymbol]:
+        """Named jump stubs (S_THUNK32) across all module streams.
+
+        These are code with a name, so `functions()` includes them. On x86 the
+        name is the undecorated one -- `RoInitialize` where the public at the
+        same address is `_RoInitialize@4` -- so they add names even where they
+        add no addresses.
+        """
+        out: list[codeview.ThunkSymbol] = []
+        for mod in self.dbi.modules:
+            out.extend(codeview.extract_thunks(self.module_symbol_bytes(mod)))
+        return out
+
+    def trampolines(self) -> list[codeview.Trampoline]:
+        """Incremental-link jump stubs (S_TRAMPOLINE) across all module streams.
+
+        Deliberately not part of `functions()`: the record carries no name, and
+        inventing one would put a symbol in the listing that the PDB does not
+        contain. Each gives a code range and the address it jumps to, which
+        callers can resolve with `to_rva()`.
+        """
+        out: list[codeview.Trampoline] = []
+        for mod in self.dbi.modules:
+            out.extend(codeview.extract_trampolines(self.module_symbol_bytes(mod)))
+        return out
+
     def data_symbols(self) -> list[codeview.DataSymbol]:
         """Global/static data symbols (S_GDATA32/S_LDATA32) across all modules,
         plus any in the symbol-record stream."""
@@ -527,12 +563,14 @@ class PDB:
     def functions(self, *, code_publics: bool = True) -> list[Function]:
         """Return all discoverable functions, merged by (segment, offset).
 
-        Two sources feed this: module proc records (rich -- they carry code
-        size) and publics (broad -- they cover thunks, CRT stubs and folded
-        entries that have no proc record). Where both describe one address the
-        proc record wins the `name` slot; every other name lands in `aliases`
-        rather than being dropped, because folded bodies really do have several
-        correct names.
+        Three sources feed this: module proc records (rich -- they carry code
+        size), publics (broad -- they cover CRT stubs and folded entries that
+        have no proc record), and S_THUNK32 records (named jump stubs). Where
+        several describe one address the first to claim it wins the `name`
+        slot -- procs, then publics, then thunks -- and every other name lands
+        in `aliases` rather than being dropped, because folded bodies really do
+        have several correct names, and because a thunk's name is the
+        undecorated spelling of the public at the same address on x86.
 
         A public counts as a function when `PUBLIC_FLAG_FUNCTION` is set *or*
         it resolves into an executable section. The second clause is not
@@ -559,7 +597,7 @@ class PDB:
                 name=p.name,
                 segment=p.segment,
                 offset=p.offset,
-                rva=self._rva(p.segment, p.offset),
+                rva=self.to_rva(p.segment, p.offset),
                 code_size=p.code_size,
                 source="proc",
                 module=module_name(p.segment, p.offset),
@@ -573,10 +611,21 @@ class PDB:
                 name=pub.name,
                 segment=pub.segment,
                 offset=pub.offset,
-                rva=self._rva(pub.segment, pub.offset),
+                rva=self.to_rva(pub.segment, pub.offset),
                 code_size=None,
                 source="public",
                 module=module_name(pub.segment, pub.offset),
+            ))
+
+        for t in self.thunks():
+            add((t.segment, t.offset), t.name, lambda t=t: Function(
+                name=t.name,
+                segment=t.segment,
+                offset=t.offset,
+                rva=self.to_rva(t.segment, t.offset),
+                code_size=t.length,
+                source="thunk",
+                module=module_name(t.segment, t.offset),
             ))
 
         return sorted(seen.values(), key=lambda f: (f.rva is None, f.rva or 0, f.name))

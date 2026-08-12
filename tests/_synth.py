@@ -117,6 +117,28 @@ def proc_ref(name: str, module: int, sym_offset: int, kind: int = 0x1125) -> byt
     return make_record(kind, payload)
 
 
+def thunk32(name: str, segment: int, offset: int, length: int = 6,
+            ordinal: int = 0) -> bytes:
+    payload = struct.pack(
+        "<IIIIHHB",
+        0, 0, 0,            # parent, end, next
+        offset, segment,
+        length,
+        ordinal,
+    ) + name.encode() + b"\x00"
+    return make_record(0x1102, payload)
+
+
+def trampoline(*, thunk_segment: int, thunk_offset: int,
+               target_segment: int, target_offset: int,
+               size: int = 5, kind: int = 0) -> bytes:
+    payload = struct.pack(
+        "<HHIIHH",
+        kind, size, thunk_offset, target_offset, thunk_segment, target_segment,
+    )
+    return make_record(0x112C, payload)
+
+
 # --- DBI / stream builders --------------------------------------------------
 
 def module_info(module_name: str, obj_name: str, sym_stream: int,
