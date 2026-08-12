@@ -16,12 +16,14 @@ Both are resolved to image RVAs via the section-header table when available.
 
 from __future__ import annotations
 
+import bisect
 import struct
 from dataclasses import dataclass, field
 
 from . import c13, codeview
 from .dbi import ContributionMap, DbiStream, ModuleInfo, SectionContribution
 from .gsi import PublicsStream
+from .ipi import IdTable
 from .msf import MsfFile
 from .names import StringTable, parse_named_stream_map
 from .omap import OmapTable
@@ -31,12 +33,14 @@ from .sections import SectionTable, sections_from_map
 STREAM_PDB_INFO = 1
 STREAM_TPI = 2
 STREAM_DBI = 3
+STREAM_IPI = 4
 
-# CodeView signature that prefixes each module symbol substream.
+# CodeView signature that prefixes each module symbol substream, and its size.
 CV_SIGNATURE_C13 = 4
+CV_SIGNATURE_SIZE = 4
 
-# Sentinel for "the /names stream has not been looked for yet", so that a PDB
-# without one is not searched again on every call.
+# Sentinel for "this stream has not been looked for yet", so that a PDB without
+# one is not searched again on every call.
 _UNREAD = object()
 
 
@@ -88,6 +92,30 @@ class Line:
 
 
 @dataclass
+class InlineFunction:
+    """A function the compiler pasted into another one instead of calling.
+
+    It has no entry point of its own, so it is not a `Function` and does not
+    appear in `functions()`. What it has is a name and the code it occupies
+    inside its caller, which can be several disjoint ranges.
+    """
+
+    name: str
+    inlinee: int  # item id in the IPI stream, resolved into `name`
+    segment: int
+    offset: int   # start of the first range
+    rva: int | None
+    ranges: list[tuple[int, int]]  # (offset, length) within the segment
+    parent: str          # the procedure this body was inlined into
+    parent_offset: int   # that procedure's entry point, which names repeat
+    parent_code_size: int
+
+    @property
+    def code_size(self) -> int:
+        return sum(length for _offset, length in self.ranges)
+
+
+@dataclass
 class PdbInfo:
     version: int
     signature: int
@@ -135,6 +163,9 @@ class Diagnostics:
     @property
     def truncated_streams(self) -> int:
         return len(self.truncations)
+    inline_sites: int = 0
+    """Inlined bodies found in the module streams. They have no entry point and
+    so never reach `functions()`; `inline_sites()` is where they live."""
 
     @property
     def managed_proc_records(self) -> int:
@@ -243,6 +274,7 @@ class PDB:
         self._stream_cache_index: int | None = None
         self._stream_cache: bytes = b""
         self._string_table = _UNREAD
+        self._id_table = _UNREAD
         self._load_sections()
 
     @classmethod
@@ -515,6 +547,74 @@ class PDB:
             out.extend(codeview.extract_trampolines(self.module_symbol_bytes(mod)))
         return out
 
+    def id_table(self) -> IdTable | None:
+        """The IPI stream's item id -> name map, or None when there is none."""
+        if self._id_table is _UNREAD:
+            self._id_table = (IdTable.parse(self.msf.read_stream(STREAM_IPI))
+                              if self.msf.is_valid_stream(STREAM_IPI) else None)
+        return self._id_table
+
+    def inline_sites(self) -> list[InlineFunction]:
+        """Functions inlined into other functions, with the code they occupy.
+
+        These are invisible to `functions()` by construction: an inlined body
+        has no entry point, so it has no procedure record and no public. On the
+        rust fixture there are fifteen of them for every procedure record, which
+        makes them the largest naming gap in the parser.
+
+        Names come from the IPI stream, which is the only place they exist --
+        `S_INLINESITE` names its inlinee by item id. Without that stream the
+        sites are still located, and `name` is empty.
+        """
+        ids = self.id_table()
+        out: list[InlineFunction] = []
+        for mod in self.dbi.modules:
+            body = self.module_symbol_bytes(mod)
+            if not body:
+                continue
+            procs: list[tuple[int, codeview.ProcSymbol]] = []
+            sites: list[tuple[int, codeview.InlineSite]] = []
+            for rec in codeview.iter_records(body):
+                try:
+                    if rec.kind in codeview.PROC_KINDS:
+                        procs.append((rec.offset + CV_SIGNATURE_SIZE,
+                                      codeview.parse_proc(rec.kind, rec.payload)))
+                    elif rec.kind == codeview.S_INLINESITE:
+                        sites.append((rec.offset + CV_SIGNATURE_SIZE,
+                                      codeview.parse_inline_site(rec.payload)))
+                except EOFError:
+                    continue  # shorter than its kind requires; skip the record
+            if not sites:
+                continue
+
+            starts = [start for start, _proc in procs]
+            for site_offset, site in sites:
+                # The enclosing procedure is the last one to start before this
+                # record and still be open at it; its End says where it closes.
+                i = bisect.bisect_right(starts, site_offset) - 1
+                if i < 0:
+                    continue
+                _start, proc = procs[i]
+                if proc.end and site_offset >= proc.end:
+                    continue
+                # Annotation offsets are relative to the procedure's start.
+                ranges = [(proc.offset + offset, length)
+                          for offset, length in site.ranges]
+                if not ranges:
+                    continue
+                out.append(InlineFunction(
+                    name=(ids.get(site.inlinee) if ids else None) or "",
+                    inlinee=site.inlinee,
+                    segment=proc.segment,
+                    offset=ranges[0][0],
+                    rva=self._rva(proc.segment, ranges[0][0]),
+                    ranges=ranges,
+                    parent=proc.name,
+                    parent_offset=proc.offset,
+                    parent_code_size=proc.code_size,
+                ))
+        return out
+
     def data_symbols(self) -> list[codeview.DataSymbol]:
         """Global/static data symbols (S_GDATA32/S_LDATA32) across all modules,
         plus any in the symbol-record stream."""
@@ -649,6 +749,7 @@ class PDB:
             omap_entries=len(self._omap) if self._omap else 0,
             has_original_sections=self._original_sections is not None,
             section_contributions=len(self._contributions),
+            inline_sites=kinds.get(codeview.S_INLINESITE, 0),
         )
 
     def _is_code(self, segment: int) -> bool:

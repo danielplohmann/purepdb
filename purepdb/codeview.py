@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import collections
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .reader import Reader
 
@@ -138,6 +138,10 @@ class ProcSymbol:
     code_size: int
     type_index: int
     kind: int         # which S_*PROC32 record this came from
+    end: int = 0
+    """Byte offset of the record that closes this procedure's scope, in the
+    module stream as stored -- signature included, like S_PROCREF's. Records
+    between the procedure and it belong to it."""
 
     @property
     def is_global(self) -> bool:
@@ -265,6 +269,145 @@ class Trampoline:
     offset: int
     target_segment: int
     target_offset: int
+
+
+# Binary annotation opcodes, the compressed instruction stream that follows an
+# S_INLINESITE record. The ones that advance the code cursor are acted on; the
+# line/column ones are decoded far enough to step over their operands. The one
+# that *rebases* the cursor, CHANGE_CODE_OFFSET_BASE, ends the walk -- see
+# `parse_inline_site`.
+BA_OP_INVALID = 0
+BA_OP_CODE_OFFSET = 1
+BA_OP_CHANGE_CODE_OFFSET_BASE = 2
+BA_OP_CHANGE_CODE_OFFSET = 3
+BA_OP_CHANGE_CODE_LENGTH = 4
+BA_OP_CHANGE_FILE = 5
+BA_OP_CHANGE_LINE_OFFSET = 6
+BA_OP_CHANGE_LINE_END_DELTA = 7
+BA_OP_CHANGE_RANGE_KIND = 8
+BA_OP_CHANGE_COLUMN_START = 9
+BA_OP_CHANGE_COLUMN_END_DELTA = 10
+BA_OP_CHANGE_CODE_OFFSET_AND_LINE_OFFSET = 11
+BA_OP_CHANGE_CODE_LENGTH_AND_CODE_OFFSET = 12
+BA_OP_CHANGE_COLUMN_END = 13
+
+# Every opcode takes one compressed operand except this one, which takes two.
+_BA_TWO_OPERANDS = BA_OP_CHANGE_CODE_LENGTH_AND_CODE_OFFSET
+
+
+def _uncompress(r: Reader) -> "int | None":
+    """Read one compressed unsigned integer.
+
+    The top bits of the first byte give the width: 1, 2 or 4 bytes. None for
+    the 4th encoding, which is not defined -- and, since operand widths are
+    what keep the stream in step, means the rest cannot be read either.
+    """
+    b0 = r.u8()
+    if b0 & 0x80 == 0:
+        return b0
+    if b0 & 0xC0 == 0x80:
+        return ((b0 & 0x3F) << 8) | r.u8()
+    if b0 & 0xE0 == 0xC0:
+        return ((b0 & 0x1F) << 24) | (r.u8() << 16) | (r.u8() << 8) | r.u8()
+    return None
+
+
+@dataclass
+class InlineSite:
+    """S_INLINESITE: a function body the compiler pasted into another one.
+
+    `ranges` are `(offset, length)` pairs *relative to the start of the
+    enclosing procedure*, because that is how the annotations express them.
+    `inlinee` is an item id into the IPI stream, not a name; `purepdb.ipi`
+    turns it into one.
+    """
+
+    inlinee: int
+    ranges: list[tuple[int, int]] = field(default_factory=list)
+
+    @property
+    def code_size(self) -> int:
+        return sum(length for _offset, length in self.ranges)
+
+
+def parse_inline_site(payload: bytes) -> InlineSite:
+    """Decode the record and walk its annotations for the code it covers.
+
+    A malformed or unrecognised annotation ends the walk: operand widths are
+    what keep the stream in step, so there is nothing sensible to read past
+    one. The ranges found before it are still real and are kept.
+    """
+    r = Reader(payload)
+    r.u32()  # Parent
+    r.u32()  # End
+    inlinee = r.u32()
+
+    site = InlineSite(inlinee=inlinee)
+    code_offset = 0
+    try:
+        while not r.eof():
+            opcode = _uncompress(r)
+            if opcode is None or opcode == BA_OP_INVALID:
+                break
+            if opcode > BA_OP_CHANGE_COLUMN_END:
+                # An opcode outside the defined range has unknown operand
+                # widths, so the bytes after it cannot be split into
+                # instructions at all. Reading one operand and carrying on
+                # would resynchronise on whatever happened to follow and
+                # fabricate ranges from it.
+                break
+            first = _uncompress(r)
+            if first is None:
+                break
+            second = None
+            if opcode == _BA_TWO_OPERANDS:
+                second = _uncompress(r)
+                if second is None:
+                    break
+
+            # The cursor is a running offset from the procedure's start. A
+            # length both closes a range and moves the cursor past it, so the
+            # next offset delta is measured from the end of the last range.
+            if opcode in (BA_OP_CODE_OFFSET, BA_OP_CHANGE_CODE_OFFSET):
+                code_offset += first
+            elif opcode == BA_OP_CHANGE_CODE_OFFSET_AND_LINE_OFFSET:
+                # One operand packs both: the code delta in the low 4 bits.
+                code_offset += first & 0xF
+            elif opcode == BA_OP_CHANGE_CODE_LENGTH_AND_CODE_OFFSET:
+                code_offset += second
+                site.ranges.append((code_offset, first))
+                code_offset += first
+            elif opcode == BA_OP_CHANGE_CODE_LENGTH:
+                site.ranges.append((code_offset, first))
+                code_offset += first
+            elif opcode == BA_OP_CHANGE_CODE_OFFSET_BASE:
+                # Rebases the cursor rather than advancing it. Nothing in the
+                # corpus emits it, so the rebase is unverified -- and every
+                # range after it would be measured from a base we did not
+                # apply. Stop, the way an undecodable operand does: the ranges
+                # already found are real, and a short answer beats a wrong one.
+                break
+    except EOFError:
+        pass
+    return site
+
+
+def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
+    """Every S_INLINESITE in a module symbol region, with its record offset.
+
+    A record whose payload is shorter than the fixed portion the kind requires
+    is skipped: RecordLen is the record's own claim, and a short one would
+    otherwise raise out of the public API.
+    """
+    out = []
+    for rec in iter_records(data):
+        if rec.kind != S_INLINESITE:
+            continue
+        try:
+            out.append((rec.offset, parse_inline_site(rec.payload)))
+        except EOFError:
+            continue
+    return out
 
 
 @dataclass
@@ -400,7 +543,7 @@ def parse_public(payload: bytes) -> PublicSymbol:
 def parse_proc(kind: int, payload: bytes) -> ProcSymbol:
     r = Reader(payload)
     r.u32()  # Parent
-    r.u32()  # End
+    end = r.u32()
     r.u32()  # Next
     code_size = r.u32()
     r.u32()  # DbgStart
@@ -417,6 +560,7 @@ def parse_proc(kind: int, payload: bytes) -> ProcSymbol:
         code_size=code_size,
         type_index=type_index,
         kind=kind,
+        end=end,
     )
 
 

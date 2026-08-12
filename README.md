@@ -99,20 +99,38 @@ the function flag. The extra ones are real code — every one resolves inside
 `public_symbols()` is unfiltered either way, so `is_function` still means exactly
 what the record says.
 
+## Inlined functions
+
+An inlined body has no entry point, so it has no procedure record and no public
+— `functions()` cannot see it by construction. `pdb.inline_sites()` reports them
+separately, each with its name, the code ranges it occupies inside its caller,
+and which function that is:
+
+```python
+for site in pdb.inline_sites():
+    print(hex(site.rva or 0), site.name, "inlined into", site.parent)
+```
+
+On the Rust fixture that is 3797 sites against 248 procedure records — fifteen
+inlined bodies for every function with an entry point, and the largest naming
+gap the parser had.
+
 ## Scope
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
 `S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
-`S_THUNK32`, `S_TRAMPOLINE`; section-header table for `segment:offset -> RVA`,
-with DBI's Section Map as the fallback when that table is absent; OMAP address
-translation for images whose code was moved after linking; the named stream
-map, the `/names` string table and the C13 `DEBUG_S_LINES` /
-`DEBUG_S_FILECHECKSUMS` subsections for `rva -> file:line`.
+`S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary annotations;
+section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
+fallback when that table is absent; OMAP address translation for images whose
+code was moved after linking; the named stream map, the `/names` string table
+and the C13 `DEBUG_S_LINES` / `DEBUG_S_FILECHECKSUMS` subsections for `rva ->
+file:line`; the IPI id records that name an inlinee.
 
-**Not supported:** TPI/IPI type decoding, column info, demangling (names come
-back raw). `/DEBUG:FASTLINK` PDBs yield publics only, and say so.
+**Not supported:** TPI type decoding, column info, demangling (names come back
+raw). The IPI stream is read only for the names inlined bodies refer to by id;
+no type is decoded. `/DEBUG:FASTLINK` PDBs yield publics only, and say so.
 
 Where the section-header stream is missing, addresses are rebuilt from the
 Section Map, which records segment sizes but no addresses. `diagnose()` says

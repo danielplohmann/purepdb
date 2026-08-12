@@ -83,6 +83,7 @@ def main(argv: list[str]) -> int:
         print(f"modules            : {d.modules} ({d.modules_with_symbols} with symbols)")
         print(f"proc records       : {d.proc_records}")
         print(f"public records     : {d.public_records}")
+        print(f"inline sites       : {d.inline_sites}")
         print(f"section headers    : {'yes' if d.has_section_headers else 'NO'}")
         print(f"truncated streams  : {d.truncated_streams}")
         print(f"malformed records  : {d.malformed_records}")
