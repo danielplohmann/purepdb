@@ -26,7 +26,10 @@ from .reader import Reader
 from .sections import SectionMapEntry, parse_section_map
 
 # Optional Debug Header slot indices.
-DBG_SECTION_HDR = 5  # array of IMAGE_SECTION_HEADER for the linked image
+DBG_OMAP_TO_SRC = 3    # final image -> original image
+DBG_OMAP_FROM_SRC = 4  # original image -> final image
+DBG_SECTION_HDR = 5    # array of IMAGE_SECTION_HEADER for the linked image
+DBG_SECTION_HDR_ORIG = 10  # the same, for the image before BBT moved code
 
 _HEADER = struct.Struct(
     "<i"   # VersionSignature (-1)
@@ -81,11 +84,28 @@ class DbiStream:
     section_map: list[SectionMapEntry] = field(default_factory=list)
     dbg_header: list[int] = field(default_factory=list)  # optional dbg header slots
 
+    def dbg_stream(self, slot: int) -> int:
+        """The stream index in an Optional Debug Header slot, or 0xFFFF."""
+        if len(self.dbg_header) > slot:
+            return self.dbg_header[slot]
+        return 0xFFFF
+
     @property
     def section_header_stream(self) -> int:
-        if len(self.dbg_header) > DBG_SECTION_HDR:
-            return self.dbg_header[DBG_SECTION_HDR]
-        return 0xFFFF
+        return self.dbg_stream(DBG_SECTION_HDR)
+
+    @property
+    def original_section_header_stream(self) -> int:
+        """Section headers of the pre-BBT image, present only alongside OMAP."""
+        return self.dbg_stream(DBG_SECTION_HDR_ORIG)
+
+    @property
+    def omap_from_src_stream(self) -> int:
+        return self.dbg_stream(DBG_OMAP_FROM_SRC)
+
+    @property
+    def omap_to_src_stream(self) -> int:
+        return self.dbg_stream(DBG_OMAP_TO_SRC)
 
     @classmethod
     def parse(cls, data: bytes) -> "DbiStream":

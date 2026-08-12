@@ -13,6 +13,7 @@ from .msf import MsfFile, MsfError, PdbError, UnsupportedPdbError
 from .pdb import PDB, Diagnostics, Function, PdbInfo
 from .codeview import DataSymbol, ProcSymbol, PublicSymbol, Truncation
 from .gsi import PublicsStream
+from .omap import OmapTable
 from .sections import (
     Section, SectionMapEntry, SectionTable, sections_from_map,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "DataSymbol",
     "Truncation",
     "PublicsStream",
+    "OmapTable",
     "Section",
     "SectionTable",
     "SectionMapEntry",
