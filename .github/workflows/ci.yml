@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default; no job here needs more, and a job that ever does
+# should raise it for itself rather than for the whole file.
+permissions:
+  contents: read
+
+# A new push to a branch makes the previous run's answer irrelevant. `main` is
+# excluded so the history of what passed there stays intact.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # The version comes from the dev group in pyproject.toml, where it is
+      # pinned exactly, rather than from a second copy here that would drift out
+      # of step with what a contributor gets locally.
+      - name: Install ruff
+        run: pip install --group dev
+      - name: Lint
+        run: ruff check --output-format github .
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the ceiling on Linux, plus the floor on the other two
+        # platforms. purepdb parses a little-endian format with struct and
+        # pathlib and nothing else, so the risk is Python version, not OS.
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.11"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --group dev -e .
+      - name: Test
+        run: python -m pytest -q
+
+  package:
+    # The sdist deliberately omits tests/data, so this proves the suite still
+    # runs from a built artefact -- the fixture-dependent tests skipping rather
+    # than failing is the property being checked.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install --group dev -e .
+          python -m build
+      - name: Check metadata
+        run: python -m twine check dist/*
+      - name: Test from the sdist
+        run: |
+          mkdir -p /tmp/from-sdist
+          tar -xzf dist/*.tar.gz -C /tmp/from-sdist --strip-components=1
+          cd /tmp/from-sdist
+          pip install --group dev -e .
+          python -m pytest -q
