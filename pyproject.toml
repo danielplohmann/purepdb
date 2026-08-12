@@ -40,6 +40,7 @@ dependencies = []
 Homepage = "https://github.com/danielplohmann/purepdb"
 Repository = "https://github.com/danielplohmann/purepdb"
 Issues = "https://github.com/danielplohmann/purepdb/issues"
+Changelog = "https://github.com/danielplohmann/purepdb/blob/main/CHANGELOG.md"
 
 [project.scripts]
 purepdb = "purepdb.__main__:cli"

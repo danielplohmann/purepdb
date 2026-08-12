@@ -11,7 +11,7 @@ documentation. See [NOTICE](NOTICE) for provenance and prior art.
 ## Install
 
 ```bash
-uv pip install -e '.[dev]'     # dev extra is just pytest
+uv pip install -e . --group dev   # pytest, ruff and ty
 ```
 
 Runtime dependencies: none. Python 3.11+.
@@ -145,7 +145,7 @@ it assumes the default `0x1000` section alignment.
 ```
 
 ```bash
-make lint    # ruff
+make lint    # ruff, then ty
 make fuzz    # malformed input must not escape as an exception
 ```
 
@@ -163,6 +163,31 @@ anything other than `PdbError` escapes -- the contract a caller writes
 `except PdbError` against. GitHub Actions runs a short pass on every change
 and a longer one nightly with a rotating seed; a failing input is saved and
 uploaded as an artefact so it can be replayed.
+
+## Releasing
+
+Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html),
+and [`CHANGELOG.md`](CHANGELOG.md) follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). What the version
+number covers is stated at the top of that file: the API in `__all__`, not the
+count of symbols a release happens to recover from a given PDB.
+
+To cut a release:
+
+1. Move the `Unreleased` entries under a new `## [x.y.z] - YYYY-MM-DD`
+   heading, and update the link definitions at the bottom of the file.
+2. Set the same version in `pyproject.toml`.
+3. Tag it: `git tag -a vx.y.z -m 'purepdb x.y.z'` and push the tag.
+
+Pushing the tag runs `.github/workflows/release.yml`, which builds the sdist
+and wheel, checks their metadata with twine, **fails if the tag and the
+packaged version disagree**, runs the suite against what it built, and
+attaches the artefacts to the GitHub release for that tag — creating the
+release with generated notes if it does not already exist.
+
+Publishing to PyPI stays manual (`make publish`). Automating it needs either a
+stored token or a Trusted Publisher configured against the repository, which
+is a maintainer decision rather than something a workflow should assume.
 
 `tests/data/` is in the repository but excluded from the sdist and wheel, so
 installing purepdb does not pull down 12 MB of binaries. Those tests skip when
