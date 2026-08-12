@@ -1,0 +1,93 @@
+name: Fuzz
+
+# A short pass on every change, because a leak is usually introduced with the
+# parser that leaks. A long nightly pass with a different seed each day and the
+# large fixtures included, because the interesting inputs are rare.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Inputs to generate
+        type: number
+        default: 20000
+      seed:
+        description: Random seed
+        type: number
+        default: 0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  quick:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Fuzz the parse boundary
+        run: python tools/fuzz.py --iterations 2000 --seed 0
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-failures-quick
+          path: fuzz-failures/
+          if-no-files-found: ignore
+
+  deep:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Inputs reach the shell only through the environment, never interpolated
+      # into the run: script, so nothing in them can be read as a command.
+      # `github.run_number` gives the nightly run a seed it has not used before.
+      # The fallback keys off the event rather than off the value, because the
+      # value cannot tell the two apart: seed 0 casts to false, so a plain
+      # `inputs.seed || github.run_number` hands a dispatch asking for seed 0
+      # the run number instead -- exactly the seed you cannot then ask for when
+      # reproducing a failure the nightly run found. Only these two events
+      # reach this job, so `schedule` means "no inputs were supplied".
+      ITERATIONS: ${{ github.event_name == 'schedule' && 20000 || inputs.iterations }}
+      SEED: ${{ github.event_name == 'schedule' && github.run_number || inputs.seed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # Raising the seed cap pulls in the two 3 MB sqlite fixtures, and an input
+      # mutated from one costs around a quarter of a second: 20000 of them is
+      # closer to 90 minutes than to the hour this job is allowed. The iteration
+      # count is the ceiling and the time budget is what actually ends the run,
+      # so the job reports a pass instead of being cancelled at the timeout.
+      - name: Fuzz the parse boundary
+        run: |
+          python tools/fuzz.py \
+            --iterations "$ITERATIONS" \
+            --seed "$SEED" \
+            --max-seed-bytes 16777216 \
+            --max-seconds 2400
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-failures-deep
+          path: fuzz-failures/
+          if-no-files-found: ignore
