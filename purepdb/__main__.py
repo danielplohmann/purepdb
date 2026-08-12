@@ -91,6 +91,7 @@ def main(argv: list[str]) -> int:
         if d.omap_entries or d.has_original_sections:
             print(f"omap entries       : {d.omap_entries} "
                   f"(rvas translated to the post-link layout)")
+        print(f"section contribs   : {d.section_contributions}")
         print("module record kinds:")
         from . import codeview
         for kind, count in sorted(d.module_kinds.items(), key=lambda kv: -kv[1]):

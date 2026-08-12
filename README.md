@@ -25,8 +25,14 @@ pdb = PDB.open("app.pdb")
 
 for fn in pdb.functions():
     print(hex(fn.rva or 0), fn.name)
-    # fn.segment, fn.offset, fn.code_size, fn.source, fn.aliases
+    # fn.segment, fn.offset, fn.code_size, fn.source, fn.aliases, fn.module
 ```
+
+`module` is the linker input the address came from — an `.obj` path, a library
+member, or `Import:foo.dll` for an import thunk — taken from DBI's Section
+Contribution table. It is what separates library code from application code
+without guessing from the name: 3453 of sqlite3 x86's 3620 functions come from
+`sqlite3.lo`, the rest from the CRT and from import thunks.
 
 `rva` is **image-relative**. Add the PE image base yourself if you need virtual
 addresses.
@@ -87,11 +93,11 @@ what the record says.
 ## Scope
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
-publics/symbol-record streams, optional debug header); CodeView `S_PUB32`,
-`S_GPROC32`/`S_LPROC32` (and `_ID` variants), `S_GDATA32`/`S_LDATA32`; section-
-header table for `segment:offset -> RVA`, with DBI's Section Map as the
-fallback when that table is absent; OMAP address translation for images whose
-code was moved after linking.
+section contributions, publics/symbol-record streams, optional debug header);
+CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
+`S_GDATA32`/`S_LDATA32`; section-header table for `segment:offset -> RVA`, with
+DBI's Section Map as the fallback when that table is absent; OMAP address
+translation for images whose code was moved after linking.
 
 **Not supported:** TPI/IPI type decoding, line/source tables, demangling (names
 come back raw). `/DEBUG:FASTLINK` PDBs yield publics only, and say so.

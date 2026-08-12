@@ -1,11 +1,12 @@
 """DBI (Debug Information) stream — always stream index 3.
 
 The DBI stream is the index of everything else. For function discovery we
-extract three things from it:
+extract four things from it:
 
   * `public_stream_index`  -> the stream holding S_PUB32 records
   * `symrecord_stream_index` -> global symbol-record stream
   * per-module `sym_stream` -> module symbol substream (S_*PROC32 live here)
+  * the Section Contribution substream -> which module each address came from
   * the Optional Debug Header, whose slot 5 names the section-headers stream
 
 The stream begins with a 64-byte header followed by seven variable-length
@@ -18,6 +19,7 @@ Format reference: https://llvm.org/docs/PDB/DbiStream.html
 
 from __future__ import annotations
 
+import bisect
 import struct
 from dataclasses import dataclass, field
 
@@ -55,9 +57,26 @@ _HEADER = struct.Struct(
 )
 assert _HEADER.size == 64
 
-# SectionContribEntry embedded in each ModuleInfo record.
-_SEC_CONTRIB = struct.Struct("<HHiiIHHII")  # 28 bytes
+# SectionContribEntry, both as embedded in each ModuleInfo record and as the
+# element type of the Section Contribution substream.
+_SEC_CONTRIB = struct.Struct(
+    "<H"   # Section (1-based)
+    "H"    # Padding
+    "i"    # Offset
+    "i"    # Size
+    "I"    # Characteristics
+    "H"    # ModuleIndex
+    "H"    # Padding
+    "I"    # DataCrc
+    "I"    # RelocCrc
+)
 assert _SEC_CONTRIB.size == 28
+
+# The substream is versioned, and the version decides the entry size: V2 adds a
+# trailing uint32 ISectCoff. Only Ver60 has been seen in practice.
+SEC_CONTRIB_VER60 = 0xF12EBA2D
+SEC_CONTRIB_V2 = 0xF13151E4
+_SEC_CONTRIB_ENTRY_SIZE = {SEC_CONTRIB_VER60: 28, SEC_CONTRIB_V2: 32}
 
 
 @dataclass
@@ -74,6 +93,53 @@ class ModuleInfo:
 
 
 @dataclass
+class SectionContribution:
+    """One linker input's claim on a range of an output section.
+
+    The linker writes one of these per contributing `.obj`/`.lib` member per
+    section, so the ranges partition the image and name what produced each
+    byte -- which is what makes library code distinguishable from application
+    code without guessing from names.
+    """
+
+    segment: int  # 1-based section index
+    offset: int   # byte offset within that section
+    size: int
+    characteristics: int
+    module_index: int  # index into DbiStream.modules
+
+    def contains(self, segment: int, offset: int) -> bool:
+        return self.segment == segment and self.offset <= offset < self.offset + self.size
+
+
+class ContributionMap:
+    """Address -> contributing module, by binary search."""
+
+    def __init__(self, contributions: list[SectionContribution]):
+        self.contributions = contributions
+        # Empty contributions cover no address and real linkers emit them --
+        # 348 of the 2267 in the rust-lld fixture. Leaving them in the search
+        # index would let one shadow the real contribution it shares a start
+        # address with. The substream is written in address order, but the
+        # lookup is a binary search and a file that is not sorted would
+        # otherwise answer wrongly.
+        self._sorted = sorted((c for c in contributions if c.size > 0),
+                              key=lambda c: (c.segment, c.offset))
+        self._keys = [(c.segment, c.offset) for c in self._sorted]
+
+    def __len__(self) -> int:
+        return len(self.contributions)
+
+    def find(self, segment: int, offset: int) -> "SectionContribution | None":
+        """The contribution covering `segment:offset`, or None for a gap."""
+        i = bisect.bisect_right(self._keys, (segment, offset)) - 1
+        if i < 0:
+            return None
+        contrib = self._sorted[i]
+        return contrib if contrib.contains(segment, offset) else None
+
+
+@dataclass
 class DbiStream:
     age: int
     global_stream_index: int
@@ -82,6 +148,7 @@ class DbiStream:
     machine: int
     modules: list[ModuleInfo] = field(default_factory=list)
     section_map: list[SectionMapEntry] = field(default_factory=list)
+    section_contributions: list[SectionContribution] = field(default_factory=list)
     dbg_header: list[int] = field(default_factory=list)  # optional dbg header slots
 
     def dbg_stream(self, slot: int) -> int:
@@ -140,6 +207,9 @@ class DbiStream:
         off = _HEADER.size
         self.modules = _parse_module_list(data[off : off + modinfo_size])
         off += modinfo_size
+        self.section_contributions = _parse_section_contributions(
+            data[off : off + seccontrib_size]
+        )
         off += seccontrib_size
         self.section_map = parse_section_map(data[off : off + secmap_size])
         off += secmap_size
@@ -188,6 +258,35 @@ def _parse_module_list(data: bytes) -> list[ModuleInfo]:
         )
         idx += 1
     return mods
+
+
+def _parse_section_contributions(data: bytes) -> list[SectionContribution]:
+    """Parse the Section Contribution substream: a version, then fixed entries.
+
+    Returns an empty list rather than guessing when the version is one we do
+    not know or the substream does not divide into whole entries -- attributing
+    functions to the wrong module would be worse than not attributing them.
+    """
+    if len(data) < 4:
+        return []
+    (version,) = struct.unpack_from("<I", data, 0)
+    entry_size = _SEC_CONTRIB_ENTRY_SIZE.get(version)
+    body = data[4:]
+    if entry_size is None or len(body) % entry_size:
+        return []
+
+    out: list[SectionContribution] = []
+    for off in range(0, len(body), entry_size):
+        (segment, _pad1, offset, size, chars,
+         module_index, _pad2, _dcrc, _rcrc) = _SEC_CONTRIB.unpack_from(body, off)
+        out.append(SectionContribution(
+            segment=segment,
+            offset=offset,
+            size=size,
+            characteristics=chars,
+            module_index=module_index,
+        ))
+    return out
 
 
 def _parse_dbg_header(data: bytes) -> list[int]:
