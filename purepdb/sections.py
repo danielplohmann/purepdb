@@ -60,7 +60,7 @@ class SectionTable:
         self.sections = sections
 
     @classmethod
-    def parse(cls, data: bytes) -> "SectionTable":
+    def parse(cls, data: bytes) -> SectionTable:
         n = len(data) // _SECTION_HEADER.size
         sections: list[Section] = []
         for i in range(n):

@@ -45,7 +45,7 @@ class OmapTable:
         return len(self.source)
 
     @classmethod
-    def parse(cls, data: bytes) -> "OmapTable":
+    def parse(cls, data: bytes) -> OmapTable:
         n = len(data) // 8
         if n == 0:
             return cls()

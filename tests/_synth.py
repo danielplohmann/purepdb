@@ -147,7 +147,7 @@ def inline_site(*, inlinee: int, annotations: bytes) -> bytes:
 _ID_KINDS = {"func": 0x1601, "mfunc": 0x1602, "string": 0x1605, "other": 0x1603}
 
 
-def ipi_stream(records: list[tuple[str, "str | None"]],
+def ipi_stream(records: list[tuple[str, str | None]],
                index_begin: int = 0x1000) -> bytes:
     """The IPI stream: a 56-byte header, then id records.
 

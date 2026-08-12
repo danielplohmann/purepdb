@@ -14,7 +14,7 @@ documentation. See [NOTICE](NOTICE) for provenance and prior art.
 uv pip install -e '.[dev]'     # dev extra is just pytest
 ```
 
-Runtime dependencies: none. Python 3.9+.
+Runtime dependencies: none. Python 3.11+.
 
 ## Usage
 
@@ -144,6 +144,11 @@ it assumes the default `0x1000` section alignment.
 .venv/bin/python -m pytest -q
 ```
 
+```bash
+make lint    # ruff
+make fuzz    # malformed input must not escape as an exception
+```
+
 Two layers. Synthetic tests build MSF/PDB byte streams with a builder
 independent of the reader, so they exercise a real serialise→parse round trip.
 Golden tests run against real `link.exe` and `rust-lld` output in `tests/data/`,
@@ -151,6 +156,13 @@ Golden tests run against real `link.exe` and `rust-lld` output in `tests/data/`,
 and the address of every exported function after following its `jmp` thunk. The
 PE reader in `tests/_pe.py` is stdlib-only and never consults the PDB, so
 agreement is evidence rather than a shared assumption.
+
+A third layer runs outside pytest. `tools/fuzz.py` drives every public entry
+point over random, structurally-corrupted and bit-flipped input, and fails if
+anything other than `PdbError` escapes -- the contract a caller writes
+`except PdbError` against. GitHub Actions runs a short pass on every change
+and a longer one nightly with a rotating seed; a failing input is saved and
+uploaded as an artefact so it can be replayed.
 
 `tests/data/` is in the repository but excluded from the sdist and wheel, so
 installing purepdb does not pull down 12 MB of binaries. Those tests skip when

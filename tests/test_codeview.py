@@ -1,5 +1,5 @@
 from purepdb import codeview
-from tests._synth import pub32, gproc32, make_record
+from tests._synth import gproc32, make_record, pub32
 
 
 def test_parse_single_public():

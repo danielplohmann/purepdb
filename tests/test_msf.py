@@ -1,8 +1,7 @@
-import struct
 
 import pytest
 
-from purepdb.msf import MsfFile, MsfError, INVALID_STREAM_SIZE
+from purepdb.msf import MsfError, MsfFile
 from tests._synth import build_msf
 
 

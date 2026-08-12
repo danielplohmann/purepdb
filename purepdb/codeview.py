@@ -165,7 +165,7 @@ _NUMERIC_LEAVES = {
 }
 
 
-def parse_numeric(r: Reader) -> "int | None":
+def parse_numeric(r: Reader) -> int | None:
     """Read a numeric leaf, or None for a leaf kind we do not decode.
 
     On None the reader is left where the leaf started, since its length is
@@ -295,7 +295,7 @@ BA_OP_CHANGE_COLUMN_END = 13
 _BA_TWO_OPERANDS = BA_OP_CHANGE_CODE_LENGTH_AND_CODE_OFFSET
 
 
-def _uncompress(r: Reader) -> "int | None":
+def _uncompress(r: Reader) -> int | None:
     """Read one compressed unsigned integer.
 
     The top bits of the first byte give the width: 1, 2 or 4 bytes. None for
@@ -439,7 +439,7 @@ class Truncation:
 
 
 def iter_records(data: bytes, start: int = 0, *,
-                 truncation: "list[Truncation] | None" = None):
+                 truncation: list[Truncation] | None = None):
     """Yield RawRecord for every length-prefixed record in `data`.
 
     Records are padded/aligned by their length field, so we trust RecordLen
@@ -523,7 +523,7 @@ def count_malformed_records(data: bytes) -> int:
     return total
 
 
-def find_truncation(data: bytes, start: int = 0) -> "Truncation | None":
+def find_truncation(data: bytes, start: int = 0) -> Truncation | None:
     """Where `data` stops being a well-formed record stream, or None."""
     report: list[Truncation] = []
     for _ in iter_records(data, start, truncation=report):
@@ -591,7 +591,7 @@ def extract_proc_refs(data: bytes) -> list[ProcRef]:
     return out
 
 
-def parse_constant(payload: bytes) -> "Constant | None":
+def parse_constant(payload: bytes) -> Constant | None:
     """None when the value uses a numeric leaf we do not decode: the name sits
     after the value, so an unknown length means the name cannot be found."""
     r = Reader(payload)
@@ -725,7 +725,7 @@ def extract_publics(data: bytes) -> list[PublicSymbol]:
 
 
 def count_kinds(data: bytes, *,
-                truncation: "list[Truncation] | None" = None) -> "collections.Counter[int]":
+                truncation: list[Truncation] | None = None) -> collections.Counter[int]:
     """Histogram of record kinds, for diagnostics."""
     return collections.Counter(
         rec.kind for rec in iter_records(data, truncation=truncation)

@@ -13,8 +13,15 @@ import pytest
 from purepdb import PDB, codeview
 from purepdb.reader import Reader
 from tests._synth import (
-    build_msf, constant, dbi_stream, module_info, module_sym_stream, pub32,
-    publics_hash_stream, section_header, udt,
+    build_msf,
+    constant,
+    dbi_stream,
+    module_info,
+    module_sym_stream,
+    pub32,
+    publics_hash_stream,
+    section_header,
+    udt,
 )
 
 

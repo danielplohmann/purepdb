@@ -17,10 +17,16 @@ import pytest
 from purepdb import PDB, codeview
 from purepdb.ipi import IdTable
 from tests._synth import (
-    build_msf, dbi_stream, gproc32, inline_site, ipi_stream, module_info,
-    module_sym_stream, publics_hash_stream, section_header,
+    build_msf,
+    dbi_stream,
+    gproc32,
+    inline_site,
+    ipi_stream,
+    module_info,
+    module_sym_stream,
+    publics_hash_stream,
+    section_header,
 )
-
 
 # --- the id stream ----------------------------------------------------------
 

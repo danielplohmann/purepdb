@@ -68,7 +68,7 @@ class Function:
     @property
     def names(self) -> list[str]:
         """Every name at this entry point, `name` first."""
-        return [self.name] + self.aliases
+        return [self.name, *self.aliases]
 
 
 @dataclass
@@ -251,7 +251,7 @@ class Diagnostics:
         return out
 
 
-def _table_or_none(data: bytes) -> "SectionTable | None":
+def _table_or_none(data: bytes) -> SectionTable | None:
     """A parsed section table, or None when it describes no sections.
 
     A stream can be present and empty, which parses into a table that is
@@ -278,11 +278,11 @@ class PDB:
         self._load_sections()
 
     @classmethod
-    def open(cls, path: str) -> "PDB":
+    def open(cls, path: str) -> PDB:
         return cls(MsfFile.open(path))
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "PDB":
+    def from_bytes(cls, data: bytes) -> PDB:
         return cls(MsfFile(data))
 
     # -- metadata -----------------------------------------------------------
@@ -800,9 +800,9 @@ class PDB:
             ))
 
         for pub in self.public_symbols():
-            if not pub.is_function:
-                if not (code_publics and self._is_code(pub.segment)):
-                    continue
+            if not pub.is_function and not (code_publics
+                                           and self._is_code(pub.segment)):
+                continue
             add((pub.segment, pub.offset), pub.name, lambda pub=pub: Function(
                 name=pub.name,
                 segment=pub.segment,

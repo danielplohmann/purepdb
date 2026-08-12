@@ -30,7 +30,7 @@ STRING_TABLE_SIGNATURE = 0xEFFEEFFE
 _SUPPORTED_HASH_VERSIONS = (1, 2)
 
 
-def _read_bit_vector(data: bytes, pos: int) -> "tuple[list[int], int]":
+def _read_bit_vector(data: bytes, pos: int) -> tuple[list[int], int]:
     """A word count, then that many uint32s. Returns the set bit indices."""
     (word_count,) = struct.unpack_from("<I", data, pos)
     pos += 4
@@ -85,7 +85,7 @@ class StringTable:
     strings: bytes
 
     @classmethod
-    def parse(cls, data: bytes) -> "StringTable | None":
+    def parse(cls, data: bytes) -> StringTable | None:
         """None when the stream is not a string table we recognise."""
         if len(data) < 12:
             return None

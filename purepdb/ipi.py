@@ -64,7 +64,7 @@ class IdTable:
         return self.names.get(item_id)
 
     @classmethod
-    def parse(cls, data: bytes) -> "IdTable | None":
+    def parse(cls, data: bytes) -> IdTable | None:
         """None when the stream is too small or its header does not fit it."""
         if len(data) < _HEADER.size:
             return None
