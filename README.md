@@ -95,9 +95,10 @@ what the record says.
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
-`S_GDATA32`/`S_LDATA32`; section-header table for `segment:offset -> RVA`, with
-DBI's Section Map as the fallback when that table is absent; OMAP address
-translation for images whose code was moved after linking.
+`S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`; section-header table for
+`segment:offset -> RVA`, with DBI's Section Map as the fallback when that table
+is absent; OMAP address translation for images whose code was moved after
+linking.
 
 **Not supported:** TPI/IPI type decoding, line/source tables, demangling (names
 come back raw). `/DEBUG:FASTLINK` PDBs yield publics only, and say so.

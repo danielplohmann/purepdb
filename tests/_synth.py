@@ -105,6 +105,18 @@ def gproc32(name: str, segment: int, offset: int, code_size: int = 0x10,
     return make_record(0x1110, payload)
 
 
+def proc_ref(name: str, module: int, sym_offset: int, kind: int = 0x1125) -> bytes:
+    """S_PROCREF/S_LPROCREF. `module` is 1-based, as the record stores it, and
+    `sym_offset` is into the module stream including its CodeView signature."""
+    payload = struct.pack(
+        "<IIH",
+        0,           # SumName
+        sym_offset,
+        module,
+    ) + name.encode() + b"\x00"
+    return make_record(kind, payload)
+
+
 # --- DBI / stream builders --------------------------------------------------
 
 def module_info(module_name: str, obj_name: str, sym_stream: int,

@@ -35,8 +35,12 @@ S_PROC_ID_END = 0x114F
 S_LDATA32 = 0x110C     # local (static) data symbol
 S_GDATA32 = 0x110D     # global data symbol
 
-_PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID})
+S_PROCREF = 0x1125     # globals index entry for a global procedure
+S_LPROCREF = 0x1127    # ... and for a static one
+
+PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID})
 _DATA_KINDS = frozenset({S_LDATA32, S_GDATA32})
+_PROC_REF_KINDS = frozenset({S_PROCREF, S_LPROCREF})
 
 # Kinds we don't decode but can name, so a diagnostic report reads as something
 # other than a list of hex numbers. Not exhaustive and not meant to be.
@@ -57,8 +61,6 @@ S_ENVBLOCK = 0x113D
 S_LOCAL = 0x113E
 S_INLINESITE = 0x114D
 S_INLINESITE_END = 0x114E
-S_PROCREF = 0x1125
-S_LPROCREF = 0x1127
 
 # Managed (.NET) code. A Windows-format PDB for a managed assembly describes
 # methods with these instead of S_*PROC32, keyed by metadata token rather than
@@ -142,6 +144,24 @@ class ProcSymbol:
 
 
 @dataclass
+class ProcRef:
+    """S_PROCREF / S_LPROCREF: the globals' index of one procedure.
+
+    Carries a name, the module that defined it, and the byte offset of the
+    S_*PROC32 record inside that module's stream -- but no address of its own.
+    """
+
+    name: str
+    module_index: int  # index into DbiStream.modules
+    sym_offset: int    # byte offset of the proc record in the module's stream
+    kind: int          # S_PROCREF or S_LPROCREF
+
+    @property
+    def is_global(self) -> bool:
+        return self.kind == S_PROCREF
+
+
+@dataclass
 class DataSymbol:
     name: str
     segment: int      # 1-based section index
@@ -220,7 +240,7 @@ def parse_record(kind: int, payload: bytes):
     """
     if kind == S_PUB32:
         return parse_public(payload)
-    if kind in _PROC_KINDS:
+    if kind in PROC_KINDS:
         return parse_proc(kind, payload)
     if kind in _DATA_KINDS:
         return parse_data(kind, payload)
@@ -294,6 +314,33 @@ def parse_proc(kind: int, payload: bytes) -> ProcSymbol:
     )
 
 
+def parse_proc_ref(kind: int, payload: bytes) -> ProcRef:
+    r = Reader(payload)
+    r.u32()  # SumName, a name hash; zero in everything we have seen
+    sym_offset = r.u32()
+    module = r.u16()  # 1-based
+    return ProcRef(name=r.cstring(), module_index=module - 1,
+                   sym_offset=sym_offset, kind=kind)
+
+
+def extract_proc_refs(data: bytes) -> list[ProcRef]:
+    """S_PROCREF/S_LPROCREF from the *symbol-record* stream.
+
+    Not from the globals stream: like the publics stream, that one holds a hash
+    table of offsets into this one and scanning it for records finds nothing.
+    See `purepdb.gsi`.
+    """
+    out: list[ProcRef] = []
+    for rec in iter_records(data):
+        if rec.kind not in _PROC_REF_KINDS:
+            continue
+        try:
+            out.append(parse_proc_ref(rec.kind, rec.payload))
+        except EOFError:
+            continue  # shorter than the kind requires; skip it, keep the rest
+    return out
+
+
 def parse_data(kind: int, payload: bytes) -> DataSymbol:
     r = Reader(payload)
     type_index = r.u32()
@@ -347,7 +394,7 @@ def extract_procs(data: bytes) -> list[ProcSymbol]:
     """
     out: list[ProcSymbol] = []
     for rec in iter_records(data):
-        if rec.kind in _PROC_KINDS:
+        if rec.kind in PROC_KINDS:
             proc = decode_record(rec.kind, rec.payload)
             if proc is not None:
                 out.append(proc)

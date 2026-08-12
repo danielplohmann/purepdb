@@ -215,6 +215,8 @@ class PDB:
         self._original_sections: SectionTable | None = None
         self._omap: OmapTable | None = None
         self._contributions = ContributionMap(self.dbi.section_contributions)
+        self._stream_cache_index: int | None = None
+        self._stream_cache: bytes = b""
         self._load_sections()
 
     @classmethod
@@ -386,6 +388,59 @@ class PDB:
         for mod in self.dbi.modules:
             procs.extend(codeview.extract_procs(self.module_symbol_bytes(mod)))
         return procs
+
+    def proc_refs(self) -> list[codeview.ProcRef]:
+        """Every procedure, indexed by the globals, from a single stream.
+
+        `module_procs()` finds the same set by walking every module stream;
+        this reads one. The two agree exactly on all three fixtures, which is
+        what makes it useful as a cross-check -- and as the only listing left
+        when a module stream is unreadable.
+
+        A ProcRef carries no address of its own, only the offset of the proc
+        record inside its module's stream. `resolve_proc_ref()` follows it.
+        """
+        idx = self.dbi.symrecord_stream_index
+        if not self.msf.is_valid_stream(idx):
+            return []
+        return codeview.extract_proc_refs(self.msf.read_stream(idx))
+
+    def _cached_stream(self, index: int) -> bytes:
+        """The last stream read, remembered.
+
+        Proc refs arrive grouped by module -- 3539 of them span 29 runs on
+        sqlite3 x86 -- so holding one stream turns a read per ref into a read
+        per module, and bounds the memory at a single stream.
+        """
+        if self._stream_cache_index != index:
+            self._stream_cache = self.msf.read_stream(index)
+            self._stream_cache_index = index
+        return self._stream_cache
+
+    def resolve_proc_ref(self, ref: codeview.ProcRef) -> codeview.ProcSymbol | None:
+        """Read the proc record a ProcRef points at, or None if it does not.
+
+        The offset is into the module stream as stored, signature included, so
+        it is used against the raw stream rather than the symbol region.
+        """
+        if not 0 <= ref.module_index < len(self.dbi.modules):
+            return None
+        mod = self.dbi.modules[ref.module_index]
+        if not self.msf.is_valid_stream(mod.sym_stream):
+            return None
+        raw = self._cached_stream(mod.sym_stream)
+        if ref.sym_offset + 4 > len(raw):
+            return None
+        rec_len, kind = struct.unpack_from("<HH", raw, ref.sym_offset)
+        end = ref.sym_offset + 2 + rec_len
+        if rec_len < 2 or kind not in codeview.PROC_KINDS or end > len(raw):
+            return None
+        try:
+            return codeview.parse_proc(kind, raw[ref.sym_offset + 4 : end])
+        except EOFError:
+            # RecordLen is the record's own claim; a short one is damage, not
+            # a proc we can read.
+            return None
 
     def data_symbols(self) -> list[codeview.DataSymbol]:
         """Global/static data symbols (S_GDATA32/S_LDATA32) across all modules,
