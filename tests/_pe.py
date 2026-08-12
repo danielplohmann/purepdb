@@ -117,7 +117,7 @@ def _parse_exports(data: bytes, image: PeImage, export_rva: int) -> dict[str, in
     fn_off = _rva_to_file_offset(data, image, functions_rva)
     nm_off = _rva_to_file_offset(data, image, names_rva)
     or_off = _rva_to_file_offset(data, image, ordinals_rva)
-    if None in (fn_off, nm_off, or_off):
+    if fn_off is None or nm_off is None or or_off is None:
         return {}
 
     out = {}

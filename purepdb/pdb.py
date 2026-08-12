@@ -39,9 +39,13 @@ STREAM_IPI = 4
 CV_SIGNATURE_C13 = 4
 CV_SIGNATURE_SIZE = 4
 
-# Sentinel for "this stream has not been looked for yet", so that a PDB without
-# one is not searched again on every call.
-_UNREAD = object()
+class _Unread:
+    """Sentinel type for "this stream has not been looked for yet", so that a
+    PDB without one is not searched again on every call. A distinct type rather
+    than a bare object() so the cached attribute still has a checkable type."""
+
+
+_UNREAD = _Unread()
 
 
 @dataclass
@@ -273,8 +277,8 @@ class PDB:
         self._contributions = ContributionMap(self.dbi.section_contributions)
         self._stream_cache_index: int | None = None
         self._stream_cache: bytes = b""
-        self._string_table = _UNREAD
-        self._id_table = _UNREAD
+        self._string_table: StringTable | _Unread | None = _UNREAD
+        self._id_table: IdTable | _Unread | None = _UNREAD
         self._load_sections()
 
     @classmethod
@@ -549,7 +553,7 @@ class PDB:
 
     def id_table(self) -> IdTable | None:
         """The IPI stream's item id -> name map, or None when there is none."""
-        if self._id_table is _UNREAD:
+        if isinstance(self._id_table, _Unread):
             self._id_table = (IdTable.parse(self.msf.read_stream(STREAM_IPI))
                               if self.msf.is_valid_stream(STREAM_IPI) else None)
         return self._id_table
@@ -662,7 +666,7 @@ class PDB:
 
     def string_table(self) -> StringTable | None:
         """The `/names` global string table, or None when the PDB has none."""
-        if self._string_table is _UNREAD:
+        if isinstance(self._string_table, _Unread):
             index = self.named_streams().get("/names", 0xFFFF)
             self._string_table = (
                 StringTable.parse(self.msf.read_stream(index))

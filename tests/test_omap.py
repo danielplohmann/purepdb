@@ -359,11 +359,14 @@ def test_a_real_pdb_with_an_address_map_translates_every_function():
     original = PDB.from_bytes(data)
     translated = PDB.from_bytes(_with_omap(data, delta))
 
+    assert translated.omap is not None
     assert len(translated.omap) == 1
     assert translated.original_sections == original.sections
 
     before = {(f.segment, f.offset): f.rva for f in original.functions()}
     after = {(f.segment, f.offset): f.rva for f in translated.functions()}
     assert before, "expected functions to translate"
-    assert after == {key: rva + delta for key, rva in before.items()}
+    assert all(rva is not None for rva in before.values())
+    assert after == {key: rva + delta for key, rva in before.items()
+                     if rva is not None}
     assert translated.diagnose().omap_entries == 1

@@ -21,6 +21,7 @@ test:
 	$(PYTHON) -m pytest -q
 lint:
 	$(PYTHON) -m ruff check .
+	$(PYTHON) -m ty check
 # A quick pass. CI runs a longer one nightly with a rotating seed.
 fuzz:
 	$(PYTHON) tools/fuzz.py --iterations 2000 --seed 0

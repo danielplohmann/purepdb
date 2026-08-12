@@ -61,7 +61,9 @@ def test_a_length_running_past_the_end_is_reported():
 
 def test_a_stub_of_a_record_header_is_reported():
     data = pub32("first", 1, 0x10) + b"\x00\x00"
-    assert "trailing bytes" in codeview.find_truncation(data).reason
+    truncation = codeview.find_truncation(data)
+    assert truncation is not None
+    assert "trailing bytes" in truncation.reason
 
 
 def test_truncation_is_opt_in_and_never_raises():
