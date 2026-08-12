@@ -57,6 +57,7 @@ def test_the_string_table_reads_by_offset():
 def test_an_offset_past_the_strings_answers_none():
     raw, _ = names_stream(["", "main.c"])
     table = StringTable.parse(raw)
+    assert table is not None
     assert table.get(9999) is None
     assert table.get(-1) is None
 

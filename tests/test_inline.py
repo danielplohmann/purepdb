@@ -45,6 +45,7 @@ def test_member_function_and_string_ids_are_named_too():
     table = IdTable.parse(ipi_stream([
         ("mfunc", "method"), ("string", "C:\\src\\main.rs"),
     ]))
+    assert table is not None
     assert table.get(0x1000) == "method"
     assert table.get(0x1001) == "C:\\src\\main.rs"
 
@@ -77,6 +78,7 @@ def test_an_id_record_too_short_for_its_kind_is_skipped_not_raised():
 
 def test_an_unknown_item_id_answers_none():
     table = IdTable.parse(ipi_stream([("func", "only")]))
+    assert table is not None
     assert table.get(0x9999) is None
 
 

@@ -359,24 +359,23 @@ def parse_inline_site(payload: bytes) -> InlineSite:
             first = _uncompress(r)
             if first is None:
                 break
-            second = None
-            if opcode == _BA_TWO_OPERANDS:
-                second = _uncompress(r)
-                if second is None:
-                    break
-
             # The cursor is a running offset from the procedure's start. A
             # length both closes a range and moves the cursor past it, so the
             # next offset delta is measured from the end of the last range.
-            if opcode in (BA_OP_CODE_OFFSET, BA_OP_CHANGE_CODE_OFFSET):
+            if opcode == _BA_TWO_OPERANDS:
+                # The only opcode taking two operands, handled here so the
+                # second one is read and used in the same place.
+                second = _uncompress(r)
+                if second is None:
+                    break
+                code_offset += second
+                site.ranges.append((code_offset, first))
+                code_offset += first
+            elif opcode in (BA_OP_CODE_OFFSET, BA_OP_CHANGE_CODE_OFFSET):
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_AND_LINE_OFFSET:
                 # One operand packs both: the code delta in the low 4 bits.
                 code_offset += first & 0xF
-            elif opcode == BA_OP_CHANGE_CODE_LENGTH_AND_CODE_OFFSET:
-                code_offset += second
-                site.ranges.append((code_offset, first))
-                code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_LENGTH:
                 site.ranges.append((code_offset, first))
                 code_offset += first

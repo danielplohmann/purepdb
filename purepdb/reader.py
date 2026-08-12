@@ -1,14 +1,20 @@
-"""A tiny cursor-based little-endian reader used by the stream parsers."""
+"""A tiny cursor-based little-endian reader used by the stream parsers.
+
+The `bytes` method shadows the builtin inside this class body, so the byte
+annotations here name `builtins.bytes` explicitly. Renaming the method would
+read better but is a public API change.
+"""
 
 from __future__ import annotations
 
+import builtins
 import struct
 
 
 class Reader:
     __slots__ = ("data", "pos")
 
-    def __init__(self, data: bytes, pos: int = 0):
+    def __init__(self, data: builtins.bytes, pos: int = 0):
         self.data = data
         self.pos = pos
 
@@ -18,7 +24,7 @@ class Reader:
     def eof(self) -> bool:
         return self.pos >= len(self.data)
 
-    def _take(self, n: int) -> bytes:
+    def _take(self, n: int) -> builtins.bytes:
         if self.pos + n > len(self.data):
             raise EOFError(f"read past end of buffer (need {n}, have {self.remaining()})")
         b = self.data[self.pos : self.pos + n]
@@ -40,7 +46,7 @@ class Reader:
     def i32(self) -> int:
         return struct.unpack("<i", self._take(4))[0]
 
-    def bytes(self, n: int) -> bytes:
+    def bytes(self, n: int) -> builtins.bytes:
         return self._take(n)
 
     def cstring(self) -> str:
