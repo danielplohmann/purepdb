@@ -19,10 +19,11 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
-from . import codeview
+from . import c13, codeview
 from .dbi import ContributionMap, DbiStream, ModuleInfo, SectionContribution
 from .gsi import PublicsStream
 from .msf import MsfFile
+from .names import StringTable, parse_named_stream_map
 from .omap import OmapTable
 from .sections import SectionTable, sections_from_map
 
@@ -33,6 +34,10 @@ STREAM_DBI = 3
 
 # CodeView signature that prefixes each module symbol substream.
 CV_SIGNATURE_C13 = 4
+
+# Sentinel for "the /names stream has not been looked for yet", so that a PDB
+# without one is not searched again on every call.
+_UNREAD = object()
 
 
 @dataclass
@@ -60,6 +65,26 @@ class Function:
     def names(self) -> list[str]:
         """Every name at this entry point, `name` first."""
         return [self.name] + self.aliases
+
+
+@dataclass
+class Line:
+    """One source line and the address it starts at."""
+
+    rva: int | None
+    segment: int
+    offset: int
+    file: str
+    line: int
+    module: str
+
+    @property
+    def is_source(self) -> bool:
+        """False for the two line numbers that are markers, not lines.
+
+        `0xFEEFEE` means the compiler generated this code with no source behind
+        it, `0xF00F00` that a debugger should not step into it."""
+        return self.line not in c13.LINE_MARKERS
 
 
 @dataclass
@@ -217,6 +242,7 @@ class PDB:
         self._contributions = ContributionMap(self.dbi.section_contributions)
         self._stream_cache_index: int | None = None
         self._stream_cache: bytes = b""
+        self._string_table = _UNREAD
         self._load_sections()
 
     @classmethod
@@ -392,6 +418,18 @@ class PDB:
             return raw[4:end]
         return raw[:end]
 
+    def module_c13_bytes(self, mod) -> bytes:
+        """The C13 line-info region of one module's stream.
+
+        It follows the symbols and the (obsolete, always empty here) C11
+        region, bounded by the three sizes in the module's DBI record.
+        """
+        if not mod.has_lines or not self.msf.is_valid_stream(mod.sym_stream):
+            return b""
+        raw = self.msf.read_stream(mod.sym_stream)
+        start = mod.sym_byte_size + mod.c11_byte_size
+        return raw[start : start + mod.c13_byte_size]
+
     def module_procs(self) -> list[codeview.ProcSymbol]:
         procs: list[codeview.ProcSymbol] = []
         for mod in self.dbi.modules:
@@ -513,6 +551,64 @@ class PDB:
         it is carried uninterpreted. The names are useful on their own.
         """
         return codeview.extract_udts(self._symbol_records())
+    # -- named streams and line info ----------------------------------------
+
+    def named_streams(self) -> dict[str, int]:
+        """Stream name -> index, from the map at the end of the PDB Info stream.
+
+        `/names` and `/LinkInfo` are what real linkers put here.
+        """
+        return parse_named_stream_map(self.msf.read_stream(STREAM_PDB_INFO))
+
+    def string_table(self) -> StringTable | None:
+        """The `/names` global string table, or None when the PDB has none."""
+        if self._string_table is _UNREAD:
+            index = self.named_streams().get("/names", 0xFFFF)
+            self._string_table = (
+                StringTable.parse(self.msf.read_stream(index))
+                if self.msf.is_valid_stream(index) else None
+            )
+        return self._string_table
+
+    def lines(self):
+        """Yield a `Line` for every source-line record, in module order.
+
+        Empty when the PDB carries no C13 line info, or no `/names` stream to
+        resolve file names against -- both of which are ordinary rather than
+        errors. There are 70157 of these in sqlite3 x86, so this is a generator.
+        """
+        strings = self.string_table()
+        if strings is None:
+            return
+        for mod in self.dbi.modules:
+            region = self.module_c13_bytes(mod)
+            if not region:
+                continue
+            subsections = list(c13.iter_subsections(region))
+            files: dict[int, int] = {}
+            for sub in subsections:
+                if sub.kind == c13.DEBUG_S_FILECHECKSUMS:
+                    files.update(c13.parse_file_checksums(sub.payload))
+            if not files:
+                continue
+            for sub in subsections:
+                if sub.kind != c13.DEBUG_S_LINES:
+                    continue
+                for entry in c13.parse_lines(sub.payload):
+                    name_offset = files.get(entry.file_offset)
+                    if name_offset is None:
+                        continue
+                    file = strings.get(name_offset)
+                    if file is None:
+                        continue
+                    yield Line(
+                        rva=self._rva(entry.segment, entry.offset),
+                        segment=entry.segment,
+                        offset=entry.offset,
+                        file=file,
+                        line=entry.line,
+                        module=mod.module_name,
+                    )
 
     def diagnose(self) -> Diagnostics:
         """Summarise what this PDB actually contains. See `Diagnostics`."""
