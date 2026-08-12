@@ -11,9 +11,17 @@ import pytest
 
 from purepdb import PDB
 from tests._synth import (
-    SEC_CONTRIB_V2, build_msf, dbi_stream, gproc32, module_info,
-    module_sym_stream, pub32, publics_hash_stream, record_offsets,
-    section_contributions, section_header,
+    SEC_CONTRIB_V2,
+    build_msf,
+    dbi_stream,
+    gproc32,
+    module_info,
+    module_sym_stream,
+    pub32,
+    publics_hash_stream,
+    record_offsets,
+    section_contributions,
+    section_header,
 )
 
 

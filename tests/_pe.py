@@ -48,7 +48,7 @@ class PeImage:
         return None
 
     @classmethod
-    def parse(cls, data: bytes) -> "PeImage":
+    def parse(cls, data: bytes) -> PeImage:
         if data[:2] != b"MZ":
             raise ValueError("not a PE image (no MZ)")
         (e_lfanew,) = struct.unpack_from("<I", data, 0x3C)

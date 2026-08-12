@@ -18,12 +18,24 @@ import pytest
 
 from purepdb import PDB
 from purepdb.sections import (
-    SEG_EXECUTE, SEG_IS_ABSOLUTE, SEG_READ, SEG_WRITE, parse_section_map,
+    SEG_EXECUTE,
+    SEG_IS_ABSOLUTE,
+    SEG_READ,
+    SEG_WRITE,
+    parse_section_map,
     sections_from_map,
 )
 from tests._synth import (
-    build_msf, dbi_stream, gproc32, module_info, module_sym_stream, pub32,
-    publics_hash_stream, record_offsets, section_header, section_map,
+    build_msf,
+    dbi_stream,
+    gproc32,
+    module_info,
+    module_sym_stream,
+    pub32,
+    publics_hash_stream,
+    record_offsets,
+    section_header,
+    section_map,
 )
 
 
@@ -218,7 +230,7 @@ def _without_section_headers(data: bytes) -> bytes:
     The slot is a uint16 at a computed offset in the DBI stream, which the MSF
     block list maps back to a file offset.
     """
-    from purepdb.dbi import DBG_SECTION_HDR, _HEADER
+    from purepdb.dbi import _HEADER, DBG_SECTION_HDR
     from purepdb.msf import MsfFile
 
     msf = MsfFile(data)
@@ -301,7 +313,7 @@ def test_the_rebuild_reproduces_the_real_section_table(rel, n_entries):
     rebuilt = sections_from_map(entries)
     real = pdb.sections
     assert len(rebuilt) == len(real)
-    for got, want in zip(rebuilt, real):
+    for got, want in zip(rebuilt, real, strict=True):
         assert got.virtual_address == want.virtual_address, want.name
         assert got.virtual_size == want.virtual_size, want.name
         assert got.executable == want.executable, want.name

@@ -11,8 +11,15 @@ import struct
 from purepdb import PDB
 from purepdb.gsi import PublicsStream
 from tests._synth import (
-    build_msf, dbi_stream, gproc32, module_info, module_sym_stream, pub32,
-    publics_hash_stream, record_offsets, section_header,
+    build_msf,
+    dbi_stream,
+    gproc32,
+    module_info,
+    module_sym_stream,
+    pub32,
+    publics_hash_stream,
+    record_offsets,
+    section_header,
 )
 
 

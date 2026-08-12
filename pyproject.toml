@@ -1,5 +1,8 @@
 [build-system]
-requires = ["hatchling"]
+# A floor rather than an exact pin: this one is resolved in the environment of
+# whoever builds the sdist, so pinning it would dictate their toolchain. 1.27 is
+# where hatchling learned the PEP 639 `license` expression used below.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,7 +10,7 @@ name = "purepdb"
 version = "0.2.0"
 description = "A minimal, dependency-free pure-Python parser for Microsoft PDB debug-info files"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = "BSD-3-Clause"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Daniel Plohmann", email = "daniel.plohmann@fkie.fraunhofer.de" }]
@@ -20,8 +23,7 @@ classifiers = [
     # upload that carries both a License-Expression and a license classifier.
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -42,12 +44,23 @@ Issues = "https://github.com/danielplohmann/purepdb/issues"
 [project.scripts]
 purepdb = "purepdb.__main__:cli"
 
-[project.optional-dependencies]
+# Development tooling is a dependency *group* (PEP 735), not an extra: an extra
+# is part of the package's public interface and installable by consumers, which
+# a test runner and a linter are not. `pip install --group dev` and `uv sync`
+# both read this.
+#
+# Pinned exactly, for the same reason the workflow actions are pinned to a
+# commit SHA: a tool that moves on its own turns an unrelated pull request red.
+# This table is the only place a dev version is decided -- CI, the Makefile and
+# the release job all resolve it -- and dependabot raises one pull request per
+# bump, so each upgrade arrives as a commit of its own.
+[dependency-groups]
 dev = [
-    "build",
-    "hatchling",  # so `make package` can use --no-isolation
-    "pytest>=7",
-    "twine",
+    "build==1.5.0",
+    "hatchling==1.32.0",  # so `make package` can use --no-isolation
+    "pytest==9.1.1",
+    "ruff==0.16.2",
+    "twine==7.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -63,3 +76,32 @@ exclude = ["tests/data", "dev"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Turn a warning into a failure rather than something nobody reads. A
+# DeprecationWarning from a future Python is exactly what this project wants CI
+# to catch, since it ships no dependencies to blame.
+filterwarnings = ["error"]
+
+[tool.ruff]
+target-version = "py311"
+# The source wraps prose-style comments at 79; 100 leaves the few long format
+# tables and struct definitions alone rather than forcing them apart.
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import sorting
+    "UP",       # pyupgrade -- keeps syntax current with requires-python
+    "B",        # bugbear
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "PIE",      # misc lints
+    "RUF",      # ruff's own
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports: the package's public surface is declared by __all__ below them.
+"purepdb/__init__.py" = ["F401"]
+# The harness deliberately catches everything and pokes at private internals.
+"tools/fuzz.py" = ["E402"]

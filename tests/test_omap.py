@@ -20,10 +20,17 @@ import pytest
 from purepdb import PDB
 from purepdb.omap import OmapTable
 from tests._synth import (
-    build_msf, dbi_stream, gproc32, module_info, module_sym_stream,
-    omap_stream, pub32, publics_hash_stream, record_offsets, section_header,
+    build_msf,
+    dbi_stream,
+    gproc32,
+    module_info,
+    module_sym_stream,
+    omap_stream,
+    pub32,
+    publics_hash_stream,
+    record_offsets,
+    section_header,
 )
-
 
 # --- the table itself -------------------------------------------------------
 

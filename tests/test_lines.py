@@ -13,11 +13,19 @@ import pytest
 from purepdb import PDB, c13
 from purepdb.names import StringTable, parse_named_stream_map
 from tests._synth import (
-    build_msf, dbi_stream, file_checksums, gproc32, line_entries, module_info,
-    module_sym_stream, names_stream, pdb_info_stream,
-    publics_hash_stream, section_header, subsection,
+    build_msf,
+    dbi_stream,
+    file_checksums,
+    gproc32,
+    line_entries,
+    module_info,
+    module_sym_stream,
+    names_stream,
+    pdb_info_stream,
+    publics_hash_stream,
+    section_header,
+    subsection,
 )
-
 
 # --- named stream map -------------------------------------------------------
 

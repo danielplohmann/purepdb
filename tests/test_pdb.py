@@ -4,8 +4,15 @@ from purepdb import PDB
 from purepdb.dbi import DbiStream
 from purepdb.sections import SectionTable
 from tests._synth import (
-    build_msf, dbi_stream, module_info, module_sym_stream,
-    gproc32, pub32, publics_hash_stream, record_offsets, section_header,
+    build_msf,
+    dbi_stream,
+    gproc32,
+    module_info,
+    module_sym_stream,
+    pub32,
+    publics_hash_stream,
+    record_offsets,
+    section_header,
 )
 
 

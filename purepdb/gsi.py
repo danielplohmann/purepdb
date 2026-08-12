@@ -68,7 +68,7 @@ class PublicsStream:
     addr_map: list[int]
 
     @classmethod
-    def parse(cls, data: bytes) -> "PublicsStream":
+    def parse(cls, data: bytes) -> PublicsStream:
         if len(data) < _PUBLICS_HEADER.size:
             raise ValueError("publics stream too small for its header")
         (sym_hash, addr_map_size, num_thunks, size_of_thunk,
