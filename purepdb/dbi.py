@@ -136,7 +136,7 @@ class ContributionMap:
     def __len__(self) -> int:
         return len(self.contributions)
 
-    def find(self, segment: int, offset: int) -> "SectionContribution | None":
+    def find(self, segment: int, offset: int) -> SectionContribution | None:
         """The contribution covering `segment:offset`, or None for a gap."""
         i = bisect.bisect_right(self._keys, (segment, offset)) - 1
         if i < 0:
@@ -181,7 +181,7 @@ class DbiStream:
         return self.dbg_stream(DBG_OMAP_TO_SRC)
 
     @classmethod
-    def parse(cls, data: bytes) -> "DbiStream":
+    def parse(cls, data: bytes) -> DbiStream:
         if len(data) < _HEADER.size:
             if not data:
                 raise UnsupportedPdbError(
@@ -234,25 +234,32 @@ def _parse_module_list(data: bytes) -> list[ModuleInfo]:
     idx = 0
     while r.remaining() >= 64:  # minimum fixed portion + 2 empty strings
         start = r.pos
-        r.u32()  # Unused1
-        r.bytes(_SEC_CONTRIB.size)  # SectionContr
-        r.u16()  # Flags
-        sym_stream = r.u16()
-        sym_byte_size = r.u32()
-        c11_byte_size = r.u32()
-        c13_byte_size = r.u32()
-        r.u16()  # SourceFileCount
-        r.u16()  # Padding
-        r.u32()  # Unused2
-        r.u32()  # SourceFileNameIndex
-        r.u32()  # PdbFilePathNameIndex
-        module_name = r.cstring()
-        obj_file_name = r.cstring()
-        # Records are padded so the next one starts 4-byte aligned relative
-        # to the substream start.
-        consumed = r.pos - start
-        pad = (-consumed) % 4
-        r.bytes(pad)
+        try:
+            r.u32()  # Unused1
+            r.bytes(_SEC_CONTRIB.size)  # SectionContr
+            r.u16()  # Flags
+            sym_stream = r.u16()
+            sym_byte_size = r.u32()
+            c11_byte_size = r.u32()
+            c13_byte_size = r.u32()
+            r.u16()  # SourceFileCount
+            r.u16()  # Padding
+            r.u32()  # Unused2
+            r.u32()  # SourceFileNameIndex
+            r.u32()  # PdbFilePathNameIndex
+            module_name = r.cstring()
+            obj_file_name = r.cstring()
+            # Records are padded so the next one starts 4-byte aligned relative
+            # to the substream start.
+            consumed = r.pos - start
+            pad = (-consumed) % 4
+            r.bytes(pad)
+        except EOFError:
+            # The remaining bytes are not a whole record: a name runs to the end
+            # of the substream without its NUL, or the fixed portion is cut
+            # short. The modules already read are still good, and stopping keeps
+            # a damaged DBI stream from raising out of `PDB.open()`.
+            break
         mods.append(
             ModuleInfo(
                 index=idx,
