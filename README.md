@@ -146,11 +146,11 @@ it assumes the default `0x1000` section alignment.
 
 Two layers. Synthetic tests build MSF/PDB byte streams with a builder
 independent of the reader, so they exercise a real serialise→parse round trip.
-Golden tests run against real `link.exe` and `rust-lld` output in `tests/data/`
-and cross-check against the companion PE image — section table, and the address
-of every exported function after following its `jmp` thunk. The PE reader in
-`tests/_pe.py` is stdlib-only and never consults the PDB, so agreement is
-evidence rather than a shared assumption.
+Golden tests run against real `link.exe` and `rust-lld` output in `tests/data/`,
+32- and 64-bit, and cross-check against the companion PE image — section table,
+and the address of every exported function after following its `jmp` thunk. The
+PE reader in `tests/_pe.py` is stdlib-only and never consults the PDB, so
+agreement is evidence rather than a shared assumption.
 
 `tests/data/` is in the repository but excluded from the sdist and wheel, so
 installing purepdb does not pull down 12 MB of binaries. Those tests skip when

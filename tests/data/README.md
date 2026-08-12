@@ -14,14 +14,24 @@ skips when they are absent.
 | `sqlite/x86/sqlite3.{dll,pdb}` | MSVC `link.exe`, VS2019-era, x86 | 3539 procs, 685 publics, 277 exports, cdecl underscore-decorated aliases |
 | `sqlite/x64/sqlite3.{dll,pdb}` | MSVC `link.exe`, VS2019-era, x64 | 3522 procs, 660 publics, 277 exports, C++ decorated aliases |
 | `rustpe/rust_pe_symbols_msvc.{exe,pdb}` | `rust-lld`, rustc 1.97.1, x64 | 248 procs, 451 publics, EH funclets, and 143 code publics with the function flag *clear* |
+| `rustpe32/rust_pe_symbols_i686.{exe,pdb}` | `rust-lld`, rustc 1.94.1, i686 | 2 procs, 5 publics, 13 inline sites, and 4 code publics with the flag clear — the `code_publics` rule at 32 bits |
 
-The rustpe fixture is the one that pins the `code_publics` rule: `link.exe` sets
-`PUBLIC_FLAG_FUNCTION` on every code public, `rust-lld` does not, and without
-the executable-section fallback this binary loses 36% of its functions.
+The rustpe fixtures are the ones that pin the `code_publics` rule: `link.exe`
+sets `PUBLIC_FLAG_FUNCTION` on every code public, `rust-lld` does not, and
+without the executable-section fallback the x64 binary loses 36% of its
+functions and the i686 one loses 4 of 6.
+
+What decides the flag turned out not to be the architecture or the linker. It
+is the contributing object's COFF symbol type: `rust-lld` sets the flag for
+every symbol rustc and clang emit, and leaves it clear for symbols defined in
+hand-written assembly, which declares no function type. The x64 fixture's
+unflagged publics are all CRT-shim and import symbols for that reason. The
+i686 fixture reproduces it deliberately and small enough to read in full —
+`stubs.s` beside it is four assembly stubs and nothing else.
 
 ## Provenance
 
-Both are redistributable and neither is third-party licensed material.
+All are redistributable and none is third-party licensed material.
 
 **sqlite3** — built with MSVC from sqlite's own sources, which are public domain.
 Image bases `0x10000000` (x86) and `0x180000000` (x64).
@@ -42,12 +52,29 @@ to be parsed and disassembled. The Rust function bodies come from the same
 prebuilt std rlibs a Windows-hosted build would link, so the code under test is
 representative.
 
+**rust_pe_symbols_i686** — our own build, regenerable with the `build.sh` beside
+it. rustc 1.94.1 (`e408947bf`, 2026-03-25), `-O -C debuginfo=2 -C panic=abort`,
+linked by `rust-lld` with `/nodefaultlib`. It is `#![no_std] #![no_main]`, so it
+links against no CRT and no import library at all, and `stubs.s` is assembled by
+clang — no Microsoft-licensed material is involved. **It is not runnable**: the
+stubs return constants. It exists to be parsed. `hash_round` and `mix_pair` are
+`#[inline(always)]`, which is where its 13 inline sites come from.
+
 ## Adding to this set
 
-Two shapes are still unrepresented and would be worth having, both as own
-builds: a **32-bit rust-lld** PDB, and a PDB with **no section-header stream**
-(Optional Debug Header slot 5 absent), which is the one documented path to
-`Function.rva is None` that no fixture has yet exercised.
+The shapes that once needed a fixture are now covered, two of them without one:
+
+* **32-bit rust-lld** — `rustpe32/`, above.
+* **No section-header stream** — covered by deriving it. `test_sectionmap.py`
+  clears Optional Debug Header slot 5 in a byte copy of each real PDB and
+  requires every function to come back at the address it had before, resolved
+  from the DBI Section Map instead. A PDB a toolchain genuinely emitted that
+  way would still be worth having, to confirm such files look like these.
+* **OMAP tables** — likewise derived. `test_omap.py` re-serialises a real PDB
+  with an address map and an original section table added, so the container,
+  the DBI stream and every symbol record are real and only the tables are
+  ours. BBT is not publicly available, so a genuinely BBT-processed PDB from a
+  vendor symbol server remains the one shape no test here has seen.
 
 Keep fixtures small, keep them own builds or public-domain sources, and record
 the toolchain here — a fixture whose provenance is unclear cannot stay in a

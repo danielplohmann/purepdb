@@ -152,6 +152,8 @@ GOLDEN = [
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 2267,
                  "std-ad7efb1bc85901be.std.fc79cc53f84b73ec-cgu.0.rcgu.o", 147,
                  id="rustpe-msvc"),
+    pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 7,
+                 "/build/rustpe32/stubs.obj", 4, id="rustpe-i686"),
 ]
 
 

@@ -41,6 +41,9 @@ CASES = [
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb",
                  "rustpe/rust_pe_symbols_msvc.exe",
                  0x8664, 7, 248, 451, 399, 124, id="rustpe-msvc"),
+    pytest.param("rustpe32/rust_pe_symbols_i686.pdb",
+                 "rustpe32/rust_pe_symbols_i686.exe",
+                 0x014C, 2, 2, 5, 6, 1, id="rustpe-i686"),
 ]
 
 
@@ -155,6 +158,9 @@ def _follow_jmp(data: bytes, image: PeImage, rva: int) -> int | None:
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb",
                  "rustpe/rust_pe_symbols_msvc.exe",
                  256, 399, id="rustpe-msvc"),
+    pytest.param("rustpe32/rust_pe_symbols_i686.pdb",
+                 "rustpe32/rust_pe_symbols_i686.exe",
+                 2, 6, id="rustpe-i686"),
 ])
 def test_unflagged_code_publics_matter_only_for_rust_lld(pdb_rel, image_rel,
                                                         strict, relaxed):
@@ -162,11 +168,43 @@ def test_unflagged_code_publics_matter_only_for_rust_lld(pdb_rel, image_rel,
 
     `link.exe` sets PUBLIC_FLAG_FUNCTION on every code public, so the two
     modes agree on sqlite3. `rust-lld` leaves it clear on 143 of them, so
-    trusting the flag alone loses 36% of that binary's functions.
+    trusting the flag alone loses 36% of that binary's functions -- and 4 of
+    the i686 fixture's 6, which is what shows the rule is not an x86_64
+    accident.
     """
     pdb, _image = _load(pdb_rel, image_rel)
     assert len(pdb.functions(code_publics=False)) == strict
     assert len(pdb.functions()) == relaxed
+
+
+def test_the_code_publics_rule_is_not_an_x86_64_accident():
+    """What leaves PUBLIC_FLAG_FUNCTION clear, on the fixture built to show it.
+
+    The flag comes from the contributing object's COFF symbol type, not from
+    the architecture and not from the linker: `rust-lld` sets it for every
+    symbol rustc and clang emit, and leaves it clear for the ones the
+    hand-written assembly stub defines, because assembly declares no function
+    type. That is the same shape as the x86_64 fixture's CRT symbols, here at
+    i686 and small enough to read in full.
+    """
+    pdb, image_bytes = _load("rustpe32/rust_pe_symbols_i686.pdb",
+                             "rustpe32/rust_pe_symbols_i686.exe")
+    image = PeImage.parse(image_bytes)
+
+    unflagged = {p.name for p in pdb.public_symbols() if not p.is_function}
+    assert unflagged == {"_platform_seed", "_platform_report",
+                         "___chkstk", "_platform_ticks"}
+
+    strict = {f.name for f in pdb.functions(code_publics=False)}
+    assert strict == {"main::digest", "main::mainCRTStartup"}
+
+    # All four are real code, and the relaxed rule is what recovers them.
+    for fn in pdb.functions():
+        if fn.name in strict:
+            continue
+        assert fn.name in unflagged
+        section = image.section_of(fn.rva)
+        assert section is not None and section.executable
 
 
 def test_unflagged_code_publics_are_real_functions():
