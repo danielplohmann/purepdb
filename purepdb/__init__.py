@@ -13,7 +13,9 @@ from .msf import MsfFile, MsfError, PdbError, UnsupportedPdbError
 from .pdb import PDB, Diagnostics, Function, PdbInfo
 from .codeview import DataSymbol, ProcSymbol, PublicSymbol, Truncation
 from .gsi import PublicsStream
-from .sections import Section, SectionTable
+from .sections import (
+    Section, SectionMapEntry, SectionTable, sections_from_map,
+)
 
 __version__ = "0.2.0"
 
@@ -29,6 +31,8 @@ __all__ = [
     "PublicsStream",
     "Section",
     "SectionTable",
+    "SectionMapEntry",
+    "sections_from_map",
     "MsfFile",
     "PdbError",
     "MsfError",
