@@ -86,10 +86,16 @@ class ModuleInfo:
     obj_file_name: str
     sym_stream: int          # stream index of this module's symbols (or 0xFFFF)
     sym_byte_size: int       # size of the symbol substream, incl. 4-byte sig
+    c11_byte_size: int = 0   # legacy line info, following the symbols
+    c13_byte_size: int = 0   # C13 line info, following that
 
     @property
     def has_symbols(self) -> bool:
         return self.sym_stream != 0xFFFF and self.sym_byte_size > 4
+
+    @property
+    def has_lines(self) -> bool:
+        return self.sym_stream != 0xFFFF and self.c13_byte_size > 0
 
 
 @dataclass
@@ -233,8 +239,8 @@ def _parse_module_list(data: bytes) -> list[ModuleInfo]:
         r.u16()  # Flags
         sym_stream = r.u16()
         sym_byte_size = r.u32()
-        r.u32()  # C11ByteSize
-        r.u32()  # C13ByteSize
+        c11_byte_size = r.u32()
+        c13_byte_size = r.u32()
         r.u16()  # SourceFileCount
         r.u16()  # Padding
         r.u32()  # Unused2
@@ -254,6 +260,8 @@ def _parse_module_list(data: bytes) -> list[ModuleInfo]:
                 obj_file_name=obj_file_name,
                 sym_stream=sym_stream,
                 sym_byte_size=sym_byte_size,
+                c11_byte_size=c11_byte_size,
+                c13_byte_size=c13_byte_size,
             )
         )
         idx += 1

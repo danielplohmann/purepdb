@@ -47,6 +47,10 @@ bodies (`/OPT:ICF`, and rust-lld by default), so one address legitimately
 carries several correct names; `fn.names` gives all of them with `fn.name`
 first. On sqlite3 x86 that is 438 of 3620 functions, worst case 4 names.
 
+`pdb.lines()` yields `(rva, file, line)` for every source line the PDB records —
+70157 of them in sqlite3 x86, across 133 files. It is a generator; the file
+names come from the `/names` stream, which `pdb.named_streams()` locates.
+
 CLI:
 
 ```
@@ -103,10 +107,12 @@ CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
 `S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
 `S_THUNK32`, `S_TRAMPOLINE`; section-header table for `segment:offset -> RVA`,
 with DBI's Section Map as the fallback when that table is absent; OMAP address
-translation for images whose code was moved after linking.
+translation for images whose code was moved after linking; the named stream
+map, the `/names` string table and the C13 `DEBUG_S_LINES` /
+`DEBUG_S_FILECHECKSUMS` subsections for `rva -> file:line`.
 
-**Not supported:** TPI/IPI type decoding, line/source tables, demangling (names
-come back raw). `/DEBUG:FASTLINK` PDBs yield publics only, and say so.
+**Not supported:** TPI/IPI type decoding, column info, demangling (names come
+back raw). `/DEBUG:FASTLINK` PDBs yield publics only, and say so.
 
 Where the section-header stream is missing, addresses are rebuilt from the
 Section Map, which records segment sizes but no addresses. `diagnose()` says

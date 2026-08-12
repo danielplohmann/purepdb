@@ -142,7 +142,8 @@ def trampoline(*, thunk_segment: int, thunk_offset: int,
 # --- DBI / stream builders --------------------------------------------------
 
 def module_info(module_name: str, obj_name: str, sym_stream: int,
-                sym_byte_size: int) -> bytes:
+                sym_byte_size: int, c11_byte_size: int = 0,
+                c13_byte_size: int = 0) -> bytes:
     """One ModuleInfo record, 4-byte aligned."""
     fixed = struct.pack(
         "<I28sHHIIIHHIII",
@@ -151,7 +152,7 @@ def module_info(module_name: str, obj_name: str, sym_stream: int,
         0,                  # Flags
         sym_stream,
         sym_byte_size,
-        0, 0,               # C11, C13
+        c11_byte_size, c13_byte_size,
         0, 0,               # source file count, padding
         0,                  # Unused2
         0, 0,               # source name idx, pdb path idx
@@ -281,6 +282,87 @@ def publics_hash_stream(record_offsets: list[int]) -> bytes:
         0,                # NumSections
     )
     return header + gsi_hash + addr_map
+
+
+def pdb_info_stream(named_streams: dict[str, int]) -> bytes:
+    """Stream 1: the version/signature/age/GUID header, then the named stream map."""
+    header = struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16
+    return header + named_stream_map(named_streams)
+
+
+def named_stream_map(entries: dict[str, int]) -> bytes:
+    """A string buffer plus a serialised hash table, as the PDB Info stream ends.
+
+    Only the occupied buckets are written; which ones they are comes from the
+    "present" bit vector. Placing them at 0, 1, 2... is not what a real hash
+    does, but the reader is not supposed to care.
+    """
+    strings = bytearray()
+    offsets = {}
+    for name in entries:
+        offsets[name] = len(strings)
+        strings += name.encode() + b"\x00"
+
+    count = len(entries)
+    present_words = (count + 31) // 32
+    words = [0] * present_words
+    for i in range(count):
+        words[i // 32] |= 1 << (i % 32)
+
+    out = [struct.pack("<I", len(strings)), bytes(strings)]
+    out.append(struct.pack("<II", count, max(count * 2, 1)))
+    out.append(struct.pack(f"<{1 + present_words}I", present_words, *words))
+    out.append(struct.pack("<I", 0))  # deleted bit vector: no words
+    for name, index in entries.items():
+        out.append(struct.pack("<II", offsets[name], index))
+    return b"".join(out)
+
+
+def names_stream(strings: list[str]) -> tuple[bytes, dict[str, int]]:
+    """The `/names` stream, and each string's offset within it."""
+    buf = bytearray()
+    offsets = {}
+    for s in strings:
+        offsets[s] = len(buf)
+        buf += s.encode() + b"\x00"
+    header = struct.pack("<III", 0xEFFEEFFE, 1, len(buf))
+    # Hash buckets and the name count follow the strings; purepdb reads by
+    # offset and never consults them, but a real stream has them.
+    tail = struct.pack("<I", 0) + struct.pack("<I", len(strings))
+    return header + bytes(buf) + tail, offsets
+
+
+def subsection(kind: int, payload: bytes) -> bytes:
+    """One C13 subsection: kind, length, payload, padded to 4 bytes."""
+    return (struct.pack("<II", kind, len(payload)) + payload
+            + b"\x00" * (-len(payload) % 4))
+
+
+def file_checksums(entries: list[tuple[int, bytes]]) -> tuple[bytes, list[int]]:
+    """A DEBUG_S_FILECHECKSUMS payload, and each entry's byte offset in it."""
+    out = bytearray()
+    offsets = []
+    for name_offset, checksum in entries:
+        offsets.append(len(out))
+        out += struct.pack("<IBB", name_offset, len(checksum), 1 if checksum else 0)
+        out += checksum
+        out += b"\x00" * (-len(out) % 4)
+    return bytes(out), offsets
+
+
+def line_entries(*, segment: int, base_offset: int, file_entry: int,
+                 entries: list[tuple[int, int, bool]]) -> bytes:
+    """A DEBUG_S_LINES payload holding one block.
+
+    Each entry is `(offset from base, line number, is_statement)`.
+    """
+    lines = b"".join(
+        struct.pack("<II", offset, (line & 0x00FFFFFF) | (0x80000000 if stmt else 0))
+        for offset, line, stmt in entries
+    )
+    block = struct.pack("<III", file_entry, len(entries), 12 + len(lines)) + lines
+    header = struct.pack("<IHHI", base_offset, segment, 0, 0x100)
+    return header + block
 
 
 def record_offsets(records: list[bytes]) -> list[int]:
