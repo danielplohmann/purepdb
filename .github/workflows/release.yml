@@ -1,0 +1,80 @@
+name: Release
+
+# A GitHub release is built on a git tag, so the tag is the trigger. Pushing
+# v1.2.3 builds the artefacts, checks their metadata, and attaches them to the
+# release for that tag -- alongside the source archives GitHub generates itself.
+#
+# Publishing to PyPI is deliberately NOT here. That needs either a stored token
+# or a Trusted Publisher configured against this repository, both of which are
+# the maintainer's decision to make rather than something a workflow should
+# assume. `make publish` remains the manual path.
+on:
+  push:
+    tags:
+      # Deliberately loose: the build job fails unless the tag equals
+      # v<pyproject version>, which is the real constraint and gives a far
+      # better error than a tag that silently matches nothing.
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip
+          pip install --group dev -e .
+          python -m build
+      - name: Check metadata
+        run: python -m twine check dist/*
+      # The tag says what version this is; the package says what version it is.
+      # A release where they disagree is worse than a release that fails here.
+      - name: Verify the tag matches the packaged version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG" != "v$version" ]; then
+            echo "tag $TAG does not match pyproject version $version" >&2
+            exit 1
+          fi
+      - name: Run the suite against what was built
+        run: python -m pytest -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+
+  attach:
+    needs: build
+    runs-on: ubuntu-latest
+    # Raised for this job alone: it is the only one that writes anything.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+          path: dist/
+      # `gh` is preinstalled on the runner, so no third-party action is needed
+      # to reach the releases API. --notes-from-tag falls back to generated
+      # notes when the tag carries no message.
+      - name: Attach artefacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --generate-notes --verify-tag
+          fi
+          gh release upload "$TAG" dist/* --clobber
