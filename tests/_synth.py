@@ -139,6 +139,46 @@ def trampoline(*, thunk_segment: int, thunk_offset: int,
     return make_record(0x112C, payload)
 
 
+def inline_site(*, inlinee: int, annotations: bytes) -> bytes:
+    payload = struct.pack("<III", 0, 0, inlinee) + annotations
+    return make_record(0x114D, payload)
+
+
+_ID_KINDS = {"func": 0x1601, "mfunc": 0x1602, "string": 0x1605, "other": 0x1603}
+
+
+def ipi_stream(records: list[tuple[str, "str | None"]],
+               index_begin: int = 0x1000) -> bytes:
+    """The IPI stream: a 56-byte header, then id records.
+
+    Each entry is `(kind, name)`; `("other", None)` writes a record purepdb
+    does not decode, which still consumes an item index.
+    """
+    body = b""
+    for kind, name in records:
+        code = _ID_KINDS[kind]
+        if name is None:
+            payload = struct.pack("<II", 0, 0)
+        elif kind == "string":
+            payload = struct.pack("<I", 0) + name.encode() + b"\x00"
+        else:
+            payload = struct.pack("<II", 0, 0x1000) + name.encode() + b"\x00"
+        body += make_record(code, payload)
+
+    header = struct.pack(
+        "<IIIIIHHIIiIiIiI",
+        20040203,                    # Version
+        56,                          # HeaderSize
+        index_begin,
+        index_begin + len(records),  # TypeIndexEnd
+        len(body),                   # TypeRecordBytes
+        0xFFFF, 0xFFFF,              # hash stream indices
+        4, 0,                        # HashKeySize, NumHashBuckets
+        0, 0, 0, 0, 0, 0,            # hash/index/adj buffer offsets and lengths
+    )
+    return header + body
+
+
 # --- DBI / stream builders --------------------------------------------------
 
 def module_info(module_name: str, obj_name: str, sym_stream: int,

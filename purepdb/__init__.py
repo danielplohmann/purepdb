@@ -10,13 +10,14 @@ empty list.
 """
 
 from .msf import MsfFile, MsfError, PdbError, UnsupportedPdbError
-from .pdb import PDB, Diagnostics, Function, Line, PdbInfo
+from .pdb import PDB, Diagnostics, Function, InlineFunction, Line, PdbInfo
 from .codeview import (
     Constant, DataSymbol, ProcRef, ProcSymbol, PublicSymbol, Truncation,
     UserDefinedType,
 )
 from .dbi import ModuleInfo, SectionContribution
 from .gsi import PublicsStream
+from .ipi import IdTable
 from .names import StringTable
 from .omap import OmapTable
 from .sections import (
@@ -30,6 +31,7 @@ __all__ = [
     "Diagnostics",
     "Function",
     "Line",
+    "InlineFunction",
     "PdbInfo",
     "PublicSymbol",
     "ProcSymbol",
@@ -43,6 +45,7 @@ __all__ = [
     "PublicsStream",
     "OmapTable",
     "StringTable",
+    "IdTable",
     "Section",
     "SectionTable",
     "SectionMapEntry",
