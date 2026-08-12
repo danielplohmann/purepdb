@@ -84,6 +84,8 @@ def main(argv: list[str]) -> int:
         print(f"proc records       : {d.proc_records}")
         print(f"public records     : {d.public_records}")
         print(f"section headers    : {'yes' if d.has_section_headers else 'NO'}")
+        print(f"truncated streams  : {d.truncated_streams}")
+        print(f"malformed records  : {d.malformed_records}")
         print("module record kinds:")
         from . import codeview
         for kind, count in sorted(d.module_kinds.items(), key=lambda kv: -kv[1]):

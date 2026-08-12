@@ -11,7 +11,7 @@ caller read an unexplained empty list.
 
 from .msf import MsfFile, MsfError, PdbError, UnsupportedPdbError
 from .pdb import PDB, Diagnostics, Function, PdbInfo
-from .codeview import DataSymbol, ProcSymbol, PublicSymbol
+from .codeview import DataSymbol, ProcSymbol, PublicSymbol, Truncation
 from .gsi import PublicsStream
 from .sections import Section, SectionTable
 
@@ -25,6 +25,7 @@ __all__ = [
     "PublicSymbol",
     "ProcSymbol",
     "DataSymbol",
+    "Truncation",
     "PublicsStream",
     "Section",
     "SectionTable",
