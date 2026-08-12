@@ -9,11 +9,15 @@ import struct
 
 import pytest
 
-from purepdb import MsfError, PDB, PdbError, UnsupportedPdbError
+from purepdb import PDB, MsfError, PdbError, UnsupportedPdbError
 from purepdb.dbi import DbiStream
 from purepdb.msf import MsfFile
 from tests._synth import (
-    build_msf, dbi_stream, module_info, module_sym_stream, publics_hash_stream,
+    build_msf,
+    dbi_stream,
+    module_info,
+    module_sym_stream,
+    publics_hash_stream,
     section_header,
 )
 
@@ -27,7 +31,7 @@ def test_portable_pdb_is_named():
 
 def test_msf_2_is_named():
     data = b"Microsoft C/C++ program database 2.00\r\n\x1aJG" + b"\x00" * 512
-    with pytest.raises(UnsupportedPdbError, match="MSF 2.00"):
+    with pytest.raises(UnsupportedPdbError, match=r"MSF 2\.00"):
         MsfFile(data)
 
 
@@ -114,3 +118,72 @@ def test_a_pdb_with_no_symbols_at_all_is_empty_not_broken():
     pdb = PDB.from_bytes(build_msf(streams))
     assert pdb.functions() == []
     assert any("no public records" in w for w in pdb.diagnose().warnings)
+
+
+# --- lengths read from the file, checked against what the file holds --------
+
+def _msf_with_directory_patched(patch: bytes, offset: int = 0) -> bytes:
+    """A valid container whose stream directory has `patch` written into it.
+
+    The directory's own blocks are named by the block map, which the superblock
+    points at, so this walks the same path the reader does to find them.
+    """
+    from tests._synth import build_msf
+
+    data = bytearray(build_msf([b"", b"\x00" * 8]))
+    (block_size, _fpm, _nblocks, _ndir, _unk,
+     block_map_addr) = struct.unpack_from("<IIIIII", data, 32)
+    (first_dir_block,) = struct.unpack_from("<I", data, block_map_addr * block_size)
+    struct.pack_into(f"<{len(patch)}s", data,
+                     first_dir_block * block_size + offset, patch)
+    return bytes(data)
+
+
+def test_a_stream_count_larger_than_the_directory_is_rejected():
+    """`num_streams` is read from the file and sizes the very next read.
+
+    Trusting it handed an absurd count straight to `struct.unpack_from`, which
+    raises `struct.error` -- the one exception this parser promises never to
+    let out.
+    """
+    data = _msf_with_directory_patched(struct.pack("<I", 0xFFFFFF))
+    with pytest.raises(MsfError, match="more than its"):
+        PDB.from_bytes(data)
+
+
+def test_a_stream_size_past_the_directory_is_rejected():
+    """Each stream's block list is sized by its own declared byte count."""
+    data = _msf_with_directory_patched(struct.pack("<I", 0x00FFFFFF), offset=4)
+    with pytest.raises(MsfError, match="past the end"):
+        PDB.from_bytes(data)
+
+
+def test_a_module_record_with_an_unterminated_name_stops_the_walk():
+    """The module list ends in two NUL-terminated strings.
+
+    A name that runs to the end of the substream without its NUL used to raise
+    `EOFError` out of `PDB.open()`. The modules already read are still good.
+    """
+    from tests._synth import (
+        build_msf,
+        dbi_stream,
+        module_info,
+        module_sym_stream,
+        publics_hash_stream,
+    )
+
+    syms = module_sym_stream(b"")
+    good = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(syms))
+    # A second record: fixed portion intact, then a name with no terminator.
+    truncated = good[:64] + b"A" * 40
+    streams = [
+        b"", struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16, b"",
+        dbi_stream(public_stream=4, symrecord_stream=6,
+                   module_list=good + truncated, dbg_header=[0xFFFF] * 6),
+        publics_hash_stream([]), syms, b"",
+    ]
+
+    pdb = PDB.from_bytes(build_msf(streams))
+    assert [m.module_name for m in pdb.dbi.modules] == ["main.obj"]
+    assert pdb.functions() == []

@@ -78,7 +78,7 @@ class SuperBlock:
     block_map_addr: int
 
     @classmethod
-    def parse(cls, data: bytes) -> "SuperBlock":
+    def parse(cls, data: bytes) -> SuperBlock:
         if len(data) < _SUPERBLOCK.size:
             raise MsfError("file too small to contain an MSF superblock")
         (magic, bs, fpm, nblocks, ndir, unk, bmap) = _SUPERBLOCK.unpack_from(data, 0)
@@ -142,20 +142,36 @@ class MsfFile:
         self._parse_directory(directory)
 
     def _parse_directory(self, d: bytes) -> None:
+        # Every length here is read from the file, so each one is checked
+        # against what the directory actually holds. Without that, a corrupt
+        # count reaches struct.unpack_from and raises `struct.error` -- past
+        # the boundary this module promises to keep errors behind.
         bs = self.super.block_size
         off = 0
+        if len(d) < 4:
+            raise MsfError("stream directory holds no stream count")
         (num_streams,) = struct.unpack_from("<I", d, off)
         off += 4
 
+        if num_streams > (len(d) - off) // 4:
+            raise MsfError(
+                f"stream directory claims {num_streams} streams, more than its "
+                f"{len(d)} bytes can describe"
+            )
         sizes = list(struct.unpack_from(f"<{num_streams}I", d, off))
         off += 4 * num_streams
 
-        for size in sizes:
+        for index, size in enumerate(sizes):
             if size == INVALID_STREAM_SIZE:
                 self.stream_sizes.append(None)
                 self.stream_blocks.append([])
                 continue
             n = _ceil_div(size, bs)
+            if n > (len(d) - off) // 4:
+                raise MsfError(
+                    f"stream {index} claims {size} bytes ({n} blocks), past the "
+                    f"end of the {len(d)}-byte stream directory"
+                )
             blocks = list(struct.unpack_from(f"<{n}I", d, off))
             off += 4 * n
             self.stream_sizes.append(size)
@@ -184,6 +200,6 @@ class MsfFile:
         return self._read_blocks(self.stream_blocks[index], size)
 
     @classmethod
-    def open(cls, path: str) -> "MsfFile":
+    def open(cls, path: str) -> MsfFile:
         with open(path, "rb") as f:
             return cls(f.read())
