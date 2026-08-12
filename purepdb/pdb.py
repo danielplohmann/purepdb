@@ -452,6 +452,33 @@ class PDB:
             out.extend(codeview.extract_data(self.msf.read_stream(self.dbi.symrecord_stream_index)))
         return out
 
+    def _symbol_records(self) -> bytes:
+        idx = self.dbi.symrecord_stream_index
+        if not self.msf.is_valid_stream(idx):
+            return b""
+        return self.msf.read_stream(idx)
+
+    def constants(self) -> list[codeview.Constant]:
+        """Named compile-time values (S_CONSTANT) from the symbol-record stream.
+
+        The global set, the one the globals hash indexes. Module streams carry
+        their own file-static constants, overlapping these by name; merging the
+        two would double-count, so they are deliberately not included.
+
+        A constant whose value uses a numeric leaf purepdb does not decode is
+        skipped -- its name sits after the value, so an unknown value length
+        means the name cannot be reached either.
+        """
+        return codeview.extract_constants(self._symbol_records())
+
+    def udts(self) -> list[codeview.UserDefinedType]:
+        """Type names (S_UDT) from the symbol-record stream.
+
+        `type_index` refers to the TPI stream, which purepdb does not read, so
+        it is carried uninterpreted. The names are useful on their own.
+        """
+        return codeview.extract_udts(self._symbol_records())
+
     def diagnose(self) -> Diagnostics:
         """Summarise what this PDB actually contains. See `Diagnostics`."""
         kinds: dict[int, int] = {}
