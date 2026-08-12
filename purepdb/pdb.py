@@ -81,6 +81,19 @@ class Diagnostics:
     public_records: int
     has_section_headers: bool
     module_kinds: dict[int, int]  # record kind -> count, module streams only
+    malformed_records: int = 0
+    """Records whose payload is shorter than the kind they claim to be. They
+    are skipped; the symbols they would have carried are lost."""
+    truncations: list[tuple[str, codeview.Truncation]] = field(default_factory=list)
+    """Record streams that stopped short, as (stream description, where).
+
+    Symbols past the bad record are simply absent, so an unreported truncation
+    is a short listing with no explanation -- the one thing `diagnose()` exists
+    to prevent."""
+
+    @property
+    def truncated_streams(self) -> int:
+        return len(self.truncations)
 
     @property
     def managed_proc_records(self) -> int:
@@ -123,6 +136,19 @@ class Diagnostics:
             out.append(
                 "no public records in the symbol-record stream; thunks and "
                 "folded entries will be missing"
+            )
+        if self.malformed_records:
+            out.append(
+                f"{self.malformed_records} record(s) are shorter than the kind "
+                f"they claim to be and were skipped; the symbols they carried "
+                f"are missing"
+            )
+        if self.truncations:
+            where, first = self.truncations[0]
+            out.append(
+                f"{self.truncated_streams} record stream(s) stopped early; "
+                f"every symbol after that point is missing. First: {where} at "
+                f"byte {first.offset:#x} ({first.reason})"
             )
         return out
 
@@ -246,13 +272,28 @@ class PDB:
         """Summarise what this PDB actually contains. See `Diagnostics`."""
         kinds: dict[int, int] = {}
         with_symbols = 0
+        truncations: list[tuple[str, codeview.Truncation]] = []
+        malformed = 0
         for mod in self.dbi.modules:
             body = self.module_symbol_bytes(mod)
             if not body:
                 continue
             with_symbols += 1
-            for kind, count in codeview.count_kinds(body).items():
+            malformed += codeview.count_malformed_records(body)
+            report: list[codeview.Truncation] = []
+            for kind, count in codeview.count_kinds(body, truncation=report).items():
                 kinds[kind] = kinds.get(kind, 0) + count
+            for t in report:
+                truncations.append((f"module {mod.index} ({mod.module_name})", t))
+
+        idx = self.dbi.symrecord_stream_index
+        if self.msf.is_valid_stream(idx):
+            symrecords = self.msf.read_stream(idx)
+            malformed += codeview.count_malformed_records(symrecords)
+            t = codeview.find_truncation(symrecords)
+            if t is not None:
+                truncations.append(("the symbol-record stream", t))
+
         return Diagnostics(
             modules=len(self.dbi.modules),
             modules_with_symbols=with_symbols,
@@ -260,6 +301,8 @@ class PDB:
             public_records=len(self.public_symbols()),
             has_section_headers=self._sections is not None,
             module_kinds=kinds,
+            malformed_records=malformed,
+            truncations=truncations,
         )
 
     def _is_code(self, segment: int) -> bool:

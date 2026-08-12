@@ -202,6 +202,28 @@ def test_publics_past_the_last_section_are_cfg_metadata():
     assert all(f.rva is not None for f in pdb.functions())
 
 
+@pytest.mark.parametrize("pdb_rel,image_rel,local_kind", [
+    pytest.param("sqlite/x86/sqlite3.pdb", "sqlite/x86/sqlite3.dll",
+                 "S_BPREL32", id="sqlite-x86"),
+    pytest.param("sqlite/x64/sqlite3.pdb", "sqlite/x64/sqlite3.dll",
+                 "S_REGREL32", id="sqlite-x64"),
+])
+def test_local_variable_records_are_named_correctly(pdb_rel, image_rel, local_kind):
+    """The dominant module record kind is locals, and must be named as such.
+
+    x86 addresses locals off the frame pointer (S_BPREL32) and x64 off a
+    register (S_REGREL32), so which name dominates is decided by the target
+    rather than by us -- which is what makes this a check of the constants
+    rather than of the histogram.
+    """
+    from purepdb import codeview
+
+    pdb, _image = _load(pdb_rel, image_rel)
+    kinds = pdb.diagnose().module_kinds
+    dominant = max(kinds.items(), key=lambda kv: kv[1])[0]
+    assert codeview.kind_name(dominant) == local_kind
+
+
 def test_publics_carry_the_decorated_name():
     """On x86 cdecl the public keeps the leading underscore the proc drops.
 
