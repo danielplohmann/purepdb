@@ -126,8 +126,31 @@ def module_info(module_name: str, obj_name: str, sym_stream: int,
     return rec + b"\x00" * pad
 
 
+def section_map(entries: list[tuple[int, int, int]]) -> bytes:
+    """The DBI Section Map substream, as link.exe writes it.
+
+    Each entry is `(flags, frame, length)`. `Offset` is written as 0, which is
+    what real linkers emit and the reason addresses have to be rebuilt.
+    """
+    out = [struct.pack("<HH", len(entries), len(entries))]
+    for flags, frame, length in entries:
+        out.append(struct.pack(
+            "<HHHHHHII",
+            flags,
+            0,        # Ovl
+            0,        # Group
+            frame,
+            0xFFFF,   # SectionName
+            0xFFFF,   # ClassName
+            0,        # Offset
+            length,
+        ))
+    return b"".join(out)
+
+
 def dbi_stream(*, public_stream: int, symrecord_stream: int,
-               module_list: bytes, dbg_header: list[int]) -> bytes:
+               module_list: bytes, dbg_header: list[int],
+               sec_map: bytes = b"") -> bytes:
     dbg_bytes = struct.pack(f"<{len(dbg_header)}H", *dbg_header)
     header = struct.pack(
         "<iIIHHHHHHiiiiiIiiHHI",
@@ -141,7 +164,9 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         symrecord_stream,   # SymRecordStreamIndex
         0,                  # PdbDllRbld
         len(module_list),   # ModInfoSize
-        0, 0, 0, 0,         # seccontrib, secmap, srcinfo, tsmap
+        0,                  # SectionContributionSize
+        len(sec_map),       # SectionMapSize
+        0, 0,               # srcinfo, tsmap
         0,                  # MFCTypeServerIndex
         len(dbg_bytes),     # OptionalDbgHeaderSize
         0,                  # ECSubstreamSize
@@ -149,7 +174,7 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         0x8664,             # Machine (AMD64)
         0,                  # Padding
     )
-    return header + module_list + dbg_bytes
+    return header + module_list + sec_map + dbg_bytes
 
 
 CODE_CHARACTERISTICS = 0x60000020  # CNT_CODE | MEM_EXECUTE | MEM_READ

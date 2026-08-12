@@ -86,6 +86,8 @@ def main(argv: list[str]) -> int:
         print(f"section headers    : {'yes' if d.has_section_headers else 'NO'}")
         print(f"truncated streams  : {d.truncated_streams}")
         print(f"malformed records  : {d.malformed_records}")
+        if d.derived_sections:
+            print(f"derived segments   : {d.derived_sections} (from the DBI Section Map)")
         print("module record kinds:")
         from . import codeview
         for kind, count in sorted(d.module_kinds.items(), key=lambda kv: -kv[1]):

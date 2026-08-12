@@ -23,7 +23,7 @@ from . import codeview
 from .dbi import DbiStream
 from .gsi import PublicsStream
 from .msf import MsfFile
-from .sections import SectionTable
+from .sections import SectionTable, sections_from_map
 
 # Fixed stream indices in every PDB.
 STREAM_PDB_INFO = 1
@@ -90,6 +90,9 @@ class Diagnostics:
     Symbols past the bad record are simply absent, so an unreported truncation
     is a short listing with no explanation -- the one thing `diagnose()` exists
     to prevent."""
+    derived_sections: int = 0
+    """Segments rebuilt from DBI's Section Map because the section-header
+    stream was absent. Non-zero means every rva is a reconstruction."""
 
     @property
     def truncated_streams(self) -> int:
@@ -109,10 +112,20 @@ class Diagnostics:
 
         out = []
         if not self.has_section_headers:
-            out.append(
-                "no section-header stream (Optional Debug Header slot 5): "
-                "segment:offset cannot be resolved, every rva is None"
-            )
+            if self.derived_sections:
+                out.append(
+                    f"no section-header stream (Optional Debug Header slot 5): "
+                    f"addresses come from {self.derived_sections} segments "
+                    f"rebuilt from DBI's Section Map, which records segment "
+                    f"sizes but no addresses. Every rva is a reconstruction "
+                    f"assuming the default 0x1000 section alignment"
+                )
+            else:
+                out.append(
+                    "no section-header stream (Optional Debug Header slot 5) "
+                    "and no usable Section Map: segment:offset cannot be "
+                    "resolved, every rva is None"
+                )
         if self.proc_records == 0 and self.modules_with_symbols:
             if self.managed_proc_records:
                 out.append(
@@ -153,11 +166,23 @@ class Diagnostics:
         return out
 
 
+def _table_or_none(data: bytes) -> "SectionTable | None":
+    """A parsed section table, or None when it describes no sections.
+
+    A stream can be present and empty, which parses into a table that is
+    perfectly valid and resolves nothing. Treating that as absent is what
+    lets the Section Map fallback run and keeps `diagnose()` honest.
+    """
+    table = SectionTable.parse(data)
+    return table if table.sections else None
+
+
 class PDB:
     def __init__(self, msf: MsfFile):
         self.msf = msf
         self.dbi = DbiStream.parse(msf.read_stream(STREAM_DBI))
         self._sections: SectionTable | None = None
+        self._derived_sections: SectionTable | None = None
         self._load_sections()
 
     @classmethod
@@ -181,22 +206,42 @@ class PDB:
     def _load_sections(self) -> None:
         idx = self.dbi.section_header_stream
         if self.msf.is_valid_stream(idx):
-            self._sections = SectionTable.parse(self.msf.read_stream(idx))
+            self._sections = _table_or_none(self.msf.read_stream(idx))
+        if self._sections is None and self.dbi.section_map:
+            derived = sections_from_map(self.dbi.section_map)
+            if derived:
+                self._derived_sections = SectionTable(derived)
 
     @property
     def sections(self) -> list:
         """The image's section table, or an empty list if the PDB omits it.
 
         Read from the section-header stream named by Optional Debug Header slot
-        5. Without it there is no way to turn segment:offset into an RVA, so
-        `Function.rva` is None throughout.
+        5, and reported only when that stream is present -- these are the
+        image's own headers, names and all. When it is absent, addresses still
+        resolve through `derived_sections`.
         """
         return self._sections.sections if self._sections else []
 
+    @property
+    def derived_sections(self) -> list:
+        """A section table rebuilt from DBI's Section Map, or an empty list.
+
+        Populated only when the section-header stream is missing, which is the
+        one case where it is needed. The Section Map records no addresses, so
+        these are reconstructed; see `sections_from_map` for what that assumes.
+        """
+        return self._derived_sections.sections if self._derived_sections else []
+
+    @property
+    def _resolver(self) -> SectionTable | None:
+        return self._sections or self._derived_sections
+
     def _rva(self, segment: int, offset: int) -> int | None:
-        if self._sections is None:
+        table = self._resolver
+        if table is None:
             return None
-        return self._sections.to_rva(segment, offset)
+        return table.to_rva(segment, offset)
 
     # -- symbols ------------------------------------------------------------
 
@@ -303,10 +348,12 @@ class PDB:
             module_kinds=kinds,
             malformed_records=malformed,
             truncations=truncations,
+            derived_sections=len(self.derived_sections),
         )
 
     def _is_code(self, segment: int) -> bool:
-        return self._sections is not None and self._sections.is_executable(segment)
+        table = self._resolver
+        return table is not None and table.is_executable(segment)
 
     def functions(self, *, code_publics: bool = True) -> list[Function]:
         """Return all discoverable functions, merged by (segment, offset).

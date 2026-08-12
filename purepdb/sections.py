@@ -8,6 +8,15 @@ Symbol records store addresses as a 1-based `segment` index plus a byte
 The section-header table is stored verbatim (as it appears in the linked
 PE image) in a dedicated stream named by DBI's Optional Debug Header slot 5.
 Each IMAGE_SECTION_HEADER is 40 bytes.
+
+When that stream is absent, DBI's Section Map substream is the fallback. It
+describes the same segments -- flags and length per segment, in image order --
+but records no addresses: every entry's `Offset` is 0. The addresses have to be
+rebuilt by laying the segments out the way the linker did, each starting at the
+next multiple of the image's section alignment. See `sections_from_map`.
+
+Format reference: the PE/COFF specification for IMAGE_SECTION_HEADER, and
+https://llvm.org/docs/PDB/DbiStream.html for the Section Map substream.
 """
 
 from __future__ import annotations
@@ -90,3 +99,105 @@ class SectionTable:
         if segment < 1 or segment > len(self.sections):
             return False
         return self.sections[segment - 1].executable
+
+
+# --- DBI Section Map --------------------------------------------------------
+
+_SECTION_MAP_HEADER = struct.Struct("<HH")  # Count, LogCount
+_SECTION_MAP_ENTRY = struct.Struct(
+    "<H"   # Flags
+    "H"    # Ovl
+    "H"    # Group
+    "H"    # Frame          -- the 1-based segment index, for a real segment
+    "H"    # SectionName
+    "H"    # ClassName
+    "I"    # Offset         -- 0 in everything link.exe and rust-lld emit
+    "I"    # SectionLength
+)
+assert _SECTION_MAP_ENTRY.size == 20
+
+# OMFSegDescFlags (subset).
+SEG_READ = 0x0001
+SEG_WRITE = 0x0002
+SEG_EXECUTE = 0x0004
+SEG_IS_ABSOLUTE = 0x0200
+
+# PE's default SectionAlignment, and the only value any fixture uses. The PDB
+# does not record the image's alignment anywhere, so rebuilding addresses from
+# the Section Map has to assume one.
+DEFAULT_SECTION_ALIGNMENT = 0x1000
+
+
+@dataclass
+class SectionMapEntry:
+    flags: int
+    frame: int   # 1-based segment index for a real segment
+    offset: int
+    length: int
+
+    @property
+    def executable(self) -> bool:
+        return bool(self.flags & SEG_EXECUTE)
+
+    @property
+    def is_absolute(self) -> bool:
+        """The trailing pseudo-segment for absolute symbols, not a real one."""
+        return bool(self.flags & SEG_IS_ABSOLUTE)
+
+
+def parse_section_map(data: bytes) -> list[SectionMapEntry]:
+    """Parse the DBI Section Map substream: a 4-byte header, then 20-byte entries."""
+    if len(data) < _SECTION_MAP_HEADER.size:
+        return []
+    (count, _log_count) = _SECTION_MAP_HEADER.unpack_from(data, 0)
+    body = data[_SECTION_MAP_HEADER.size:]
+    n = min(count, len(body) // _SECTION_MAP_ENTRY.size)
+    out = []
+    for i in range(n):
+        (flags, _ovl, _group, frame, _name, _cls,
+         offset, length) = _SECTION_MAP_ENTRY.unpack_from(body, i * _SECTION_MAP_ENTRY.size)
+        out.append(SectionMapEntry(flags=flags, frame=frame,
+                                   offset=offset, length=length))
+    return out
+
+
+def sections_from_map(entries: list[SectionMapEntry],
+                      alignment: int = DEFAULT_SECTION_ALIGNMENT) -> list[Section]:
+    """Rebuild a section table from a Section Map, for PDBs missing slot 5.
+
+    The map records no addresses -- `Offset` is 0 throughout -- so the layout
+    is reconstructed the way the linker built it: the first segment starts one
+    alignment unit in, and each subsequent one at the next multiple of the
+    alignment past the end of the last. That reproduces the real table exactly
+    on every fixture, which is the evidence this is the right rule; it is still
+    a reconstruction, and an image built with a non-default SectionAlignment
+    would come out wrong.
+
+    Names are not recoverable: `SectionName` indexes a table these PDBs do not
+    populate (it is 0xFFFF throughout), so segments are named by index.
+
+    Returns an empty list -- no reconstruction at all -- when the real segments
+    are not the contiguous 1..n that positional resolution assumes. A symbol's
+    segment is resolved by position in this list, so a map that numbers its
+    frames otherwise would shift every address after the gap. Refusing leaves
+    `Function.rva` None and `diagnose()` saying why, which is the answer this
+    parser is allowed to give; a shifted address is not.
+    """
+    real = [e for e in entries if not e.is_absolute]
+    if [e.frame for e in real] != list(range(1, len(real) + 1)):
+        return []
+
+    out: list[Section] = []
+    cursor = alignment
+    for entry in real:
+        characteristics = 0
+        if entry.executable:
+            characteristics = IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE
+        out.append(Section(
+            name=f"seg{entry.frame}",
+            virtual_address=cursor,
+            virtual_size=entry.length,
+            characteristics=characteristics,
+        ))
+        cursor += -(-entry.length // alignment) * alignment
+    return out

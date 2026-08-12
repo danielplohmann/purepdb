@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from .msf import MsfError, UnsupportedPdbError
 from .reader import Reader
+from .sections import SectionMapEntry, parse_section_map
 
 # Optional Debug Header slot indices.
 DBG_SECTION_HDR = 5  # array of IMAGE_SECTION_HEADER for the linked image
@@ -77,6 +78,7 @@ class DbiStream:
     symrecord_stream_index: int
     machine: int
     modules: list[ModuleInfo] = field(default_factory=list)
+    section_map: list[SectionMapEntry] = field(default_factory=list)
     dbg_header: list[int] = field(default_factory=list)  # optional dbg header slots
 
     @property
@@ -119,6 +121,7 @@ class DbiStream:
         self.modules = _parse_module_list(data[off : off + modinfo_size])
         off += modinfo_size
         off += seccontrib_size
+        self.section_map = parse_section_map(data[off : off + secmap_size])
         off += secmap_size
         off += srcinfo_size
         off += tsmap_size

@@ -88,12 +88,18 @@ what the record says.
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 publics/symbol-record streams, optional debug header); CodeView `S_PUB32`,
-`S_GPROC32`/`S_LPROC32` (and `_ID` variants), `S_GDATA32`/`S_LDATA32`;
-section-header table for `segment:offset -> RVA`.
+`S_GPROC32`/`S_LPROC32` (and `_ID` variants), `S_GDATA32`/`S_LDATA32`; section-
+header table for `segment:offset -> RVA`, with DBI's Section Map as the
+fallback when that table is absent.
 
 **Not supported:** TPI/IPI type decoding, line/source tables, demangling (names
-come back raw), PDBs whose section info comes only from the DBI Section Map.
-`/DEBUG:FASTLINK` PDBs yield publics only, and say so.
+come back raw). `/DEBUG:FASTLINK` PDBs yield publics only, and say so.
+
+Where the section-header stream is missing, addresses are rebuilt from the
+Section Map, which records segment sizes but no addresses. `diagnose()` says
+when that happened, because the result is a reconstruction — taking the stream
+away from each fixture leaves every function at the address it had before, but
+it assumes the default `0x1000` section alignment.
 
 ## Tests
 
