@@ -235,6 +235,11 @@ def record_offsets(records: list[bytes]) -> list[int]:
     return offsets
 
 
+def omap_stream(entries: list[tuple[int, int]]) -> bytes:
+    """An OMAP table: `struct { uint32 rva; uint32 rvaTo; }` sorted by rva."""
+    return b"".join(struct.pack("<II", rva, rva_to) for rva, rva_to in entries)
+
+
 def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74) -> bytes:
     payload = struct.pack("<IIH", type_index, offset, segment) + name.encode() + b"\x00"
     return make_record(0x110D, payload)

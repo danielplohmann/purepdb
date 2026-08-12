@@ -88,6 +88,9 @@ def main(argv: list[str]) -> int:
         print(f"malformed records  : {d.malformed_records}")
         if d.derived_sections:
             print(f"derived segments   : {d.derived_sections} (from the DBI Section Map)")
+        if d.omap_entries or d.has_original_sections:
+            print(f"omap entries       : {d.omap_entries} "
+                  f"(rvas translated to the post-link layout)")
         print("module record kinds:")
         from . import codeview
         for kind, count in sorted(d.module_kinds.items(), key=lambda kv: -kv[1]):

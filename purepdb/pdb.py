@@ -23,6 +23,7 @@ from . import codeview
 from .dbi import DbiStream
 from .gsi import PublicsStream
 from .msf import MsfFile
+from .omap import OmapTable
 from .sections import SectionTable, sections_from_map
 
 # Fixed stream indices in every PDB.
@@ -93,6 +94,10 @@ class Diagnostics:
     derived_sections: int = 0
     """Segments rebuilt from DBI's Section Map because the section-header
     stream was absent. Non-zero means every rva is a reconstruction."""
+    omap_entries: int = 0
+    """Size of the original-to-final address map, 0 when the image is not
+    BBT-processed. Non-zero means every RVA reported went through it."""
+    has_original_sections: bool = False
 
     @property
     def truncated_streams(self) -> int:
@@ -111,7 +116,7 @@ class Diagnostics:
         from . import codeview
 
         out = []
-        if not self.has_section_headers:
+        if not self.has_section_headers and not self.has_original_sections:
             if self.derived_sections:
                 out.append(
                     f"no section-header stream (Optional Debug Header slot 5): "
@@ -163,6 +168,22 @@ class Diagnostics:
                 f"every symbol after that point is missing. First: {where} at "
                 f"byte {first.offset:#x} ({first.reason})"
             )
+        if self.omap_entries and not self.has_original_sections:
+            out.append(
+                "an original-to-final address map is present (Optional Debug "
+                "Header slot 4) but the original section table in slot 10 is "
+                "not, so there is no pre-optimisation address space to "
+                "translate out of; addresses are reported as the section "
+                "headers give them and the map is not applied"
+            )
+        if self.has_original_sections and not self.omap_entries:
+            out.append(
+                "this image was processed after linking (Optional Debug Header "
+                "slot 10 carries its original section table) but the "
+                "original-to-final address map in slot 4 is missing: every rva "
+                "is in the pre-optimisation address space and does not match "
+                "the shipped image"
+            )
         return out
 
 
@@ -183,6 +204,8 @@ class PDB:
         self.dbi = DbiStream.parse(msf.read_stream(STREAM_DBI))
         self._sections: SectionTable | None = None
         self._derived_sections: SectionTable | None = None
+        self._original_sections: SectionTable | None = None
+        self._omap: OmapTable | None = None
         self._load_sections()
 
     @classmethod
@@ -212,6 +235,14 @@ class PDB:
             if derived:
                 self._derived_sections = SectionTable(derived)
 
+        idx = self.dbi.original_section_header_stream
+        if self.msf.is_valid_stream(idx):
+            self._original_sections = _table_or_none(self.msf.read_stream(idx))
+
+        idx = self.dbi.omap_from_src_stream
+        if self.msf.is_valid_stream(idx):
+            self._omap = OmapTable.parse(self.msf.read_stream(idx))
+
     @property
     def sections(self) -> list:
         """The image's section table, or an empty list if the PDB omits it.
@@ -234,14 +265,45 @@ class PDB:
         return self._derived_sections.sections if self._derived_sections else []
 
     @property
-    def _resolver(self) -> SectionTable | None:
-        return self._sections or self._derived_sections
+    def original_sections(self) -> list:
+        """The pre-BBT section table (Optional Debug Header slot 10), if any.
+
+        Present only on images whose code was moved after linking. Symbol
+        `segment:offset` pairs are expressed against *this* table, not against
+        `sections`, which describes the shipped layout.
+        """
+        return self._original_sections.sections if self._original_sections else []
+
+    @property
+    def omap(self) -> OmapTable | None:
+        """The original-to-final address map, when the image was BBT-processed."""
+        return self._omap
+
+    @property
+    def _symbol_sections(self) -> SectionTable | None:
+        """The section table symbol addresses are expressed against.
+
+        The pre-BBT table when the image was reordered after linking, then the
+        image's own headers, then the one rebuilt from the Section Map.
+        """
+        return (self._original_sections or self._sections
+                or self._derived_sections)
 
     def _rva(self, segment: int, offset: int) -> int | None:
-        table = self._resolver
+        table = self._symbol_sections
         if table is None:
             return None
-        return table.to_rva(segment, offset)
+        rva = table.to_rva(segment, offset)
+        # Two ways the map must not be applied. An empty one maps nothing, so
+        # testing falsiness rather than None keeps it from nulling every rva.
+        # And it translates out of the *pre-BBT* address space, so an address
+        # resolved against any other table is already final -- running it
+        # through the map would move it somewhere no symbol lives.
+        if rva is None or not self._omap:
+            return rva
+        if table is not self._original_sections:
+            return rva
+        return self._omap.lookup(rva)
 
     # -- symbols ------------------------------------------------------------
 
@@ -349,10 +411,12 @@ class PDB:
             malformed_records=malformed,
             truncations=truncations,
             derived_sections=len(self.derived_sections),
+            omap_entries=len(self._omap) if self._omap else 0,
+            has_original_sections=self._original_sections is not None,
         )
 
     def _is_code(self, segment: int) -> bool:
-        table = self._resolver
+        table = self._symbol_sections
         return table is not None and table.is_executable(segment)
 
     def functions(self, *, code_publics: bool = True) -> list[Function]:
