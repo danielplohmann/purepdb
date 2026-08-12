@@ -37,10 +37,15 @@ without guessing from the name: 3453 of sqlite3 x86's 3620 functions come from
 `rva` is **image-relative**. Add the PE image base yourself if you need virtual
 addresses.
 
+`source` is `"proc"`, `"public"` or `"thunk"`, naming the record the entry came
+from. Incremental-link trampolines are *not* in this list — they carry no name,
+so `pdb.trampolines()` reports them separately, as a code range plus the address
+it jumps to.
+
 `aliases` holds the other names at the same entry point. Linkers fold identical
 bodies (`/OPT:ICF`, and rust-lld by default), so one address legitimately
 carries several correct names; `fn.names` gives all of them with `fn.name`
-first. On sqlite3 x86 that is 357 of 3620 functions, worst case 3 names.
+first. On sqlite3 x86 that is 438 of 3620 functions, worst case 4 names.
 
 CLI:
 
@@ -95,10 +100,10 @@ what the record says.
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
-`S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`;
-section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
-fallback when that table is absent; OMAP address translation for images whose
-code was moved after linking.
+`S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
+`S_THUNK32`, `S_TRAMPOLINE`; section-header table for `segment:offset -> RVA`,
+with DBI's Section Map as the fallback when that table is absent; OMAP address
+translation for images whose code was moved after linking.
 
 **Not supported:** TPI/IPI type decoding, line/source tables, demangling (names
 come back raw). `/DEBUG:FASTLINK` PDBs yield publics only, and say so.
