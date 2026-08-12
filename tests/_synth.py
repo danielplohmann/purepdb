@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import struct
 
+from purepdb.dbi import SEC_CONTRIB_V2, SEC_CONTRIB_VER60
 from purepdb.msf import BIG_MSF_MAGIC
 
 
@@ -148,9 +149,30 @@ def section_map(entries: list[tuple[int, int, int]]) -> bytes:
     return b"".join(out)
 
 
+def section_contributions(entries: list[tuple[int, int, int, int]],
+                          version: int = SEC_CONTRIB_VER60) -> bytes:
+    """The Section Contribution substream: a version, then fixed-size entries.
+
+    Each entry is `(segment, offset, size, module_index)`. V2 appends a
+    trailing ISectCoff, which is what makes its entries 32 bytes rather than 28.
+    """
+    out = [struct.pack("<I", version)]
+    for segment, offset, size, module_index in entries:
+        out.append(struct.pack(
+            "<HHiiIHHII",
+            segment, 0, offset, size,
+            CODE_CHARACTERISTICS,
+            module_index, 0,
+            0, 0,  # data crc, reloc crc
+        ))
+        if version == SEC_CONTRIB_V2:
+            out.append(struct.pack("<I", 0))  # ISectCoff
+    return b"".join(out)
+
+
 def dbi_stream(*, public_stream: int, symrecord_stream: int,
                module_list: bytes, dbg_header: list[int],
-               sec_map: bytes = b"") -> bytes:
+               sec_map: bytes = b"", sec_contrib: bytes = b"") -> bytes:
     dbg_bytes = struct.pack(f"<{len(dbg_header)}H", *dbg_header)
     header = struct.pack(
         "<iIIHHHHHHiiiiiIiiHHI",
@@ -164,7 +186,7 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         symrecord_stream,   # SymRecordStreamIndex
         0,                  # PdbDllRbld
         len(module_list),   # ModInfoSize
-        0,                  # SectionContributionSize
+        len(sec_contrib),   # SectionContributionSize
         len(sec_map),       # SectionMapSize
         0, 0,               # srcinfo, tsmap
         0,                  # MFCTypeServerIndex
@@ -174,7 +196,8 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         0x8664,             # Machine (AMD64)
         0,                  # Padding
     )
-    return header + module_list + sec_map + dbg_bytes
+    # Substream order is fixed by the header: contributions precede the map.
+    return header + module_list + sec_contrib + sec_map + dbg_bytes
 
 
 CODE_CHARACTERISTICS = 0x60000020  # CNT_CODE | MEM_EXECUTE | MEM_READ

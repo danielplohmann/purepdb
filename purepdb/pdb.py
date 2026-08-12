@@ -20,7 +20,7 @@ import struct
 from dataclasses import dataclass, field
 
 from . import codeview
-from .dbi import DbiStream
+from .dbi import ContributionMap, DbiStream, ModuleInfo, SectionContribution
 from .gsi import PublicsStream
 from .msf import MsfFile
 from .omap import OmapTable
@@ -43,6 +43,11 @@ class Function:
     rva: int | None
     code_size: int | None
     source: str  # "proc" or "public"
+    module: str | None = None
+    """The linker input this address came from, per the Section Contribution
+    substream: an `.obj` path, a library member, or `Import:foo.dll` for an
+    import thunk. None when the PDB has no usable contribution table, or when
+    the address falls in a gap between contributions."""
     aliases: list[str] = field(default_factory=list)
     """Other names sharing this entry point, in discovery order.
 
@@ -98,6 +103,9 @@ class Diagnostics:
     """Size of the original-to-final address map, 0 when the image is not
     BBT-processed. Non-zero means every RVA reported went through it."""
     has_original_sections: bool = False
+    section_contributions: int = 0
+    """Entries in the Section Contribution substream. Zero means `Function.module`
+    is None throughout -- the substream is absent, or a version we do not read."""
 
     @property
     def truncated_streams(self) -> int:
@@ -206,6 +214,7 @@ class PDB:
         self._derived_sections: SectionTable | None = None
         self._original_sections: SectionTable | None = None
         self._omap: OmapTable | None = None
+        self._contributions = ContributionMap(self.dbi.section_contributions)
         self._load_sections()
 
     @classmethod
@@ -304,6 +313,19 @@ class PDB:
         if table is not self._original_sections:
             return rva
         return self._omap.lookup(rva)
+
+    # -- section contributions ----------------------------------------------
+
+    def section_contributions(self) -> list[SectionContribution]:
+        """Every linker input's claim on a range of the image, address-ordered."""
+        return self._contributions.contributions
+
+    def module_of(self, segment: int, offset: int) -> ModuleInfo | None:
+        """The linker input that contributed `segment:offset`, if it is known."""
+        contrib = self._contributions.find(segment, offset)
+        if contrib is None or contrib.module_index >= len(self.dbi.modules):
+            return None
+        return self.dbi.modules[contrib.module_index]
 
     # -- symbols ------------------------------------------------------------
 
@@ -413,6 +435,7 @@ class PDB:
             derived_sections=len(self.derived_sections),
             omap_entries=len(self._omap) if self._omap else 0,
             has_original_sections=self._original_sections is not None,
+            section_contributions=len(self._contributions),
         )
 
     def _is_code(self, segment: int) -> bool:
@@ -438,6 +461,10 @@ class PDB:
         """
         seen: dict[tuple[int, int], Function] = {}
 
+        def module_name(segment, offset):
+            mod = self.module_of(segment, offset)
+            return mod.module_name if mod else None
+
         def add(key, name, make):
             fn = seen.get(key)
             if fn is None:
@@ -453,6 +480,7 @@ class PDB:
                 rva=self._rva(p.segment, p.offset),
                 code_size=p.code_size,
                 source="proc",
+                module=module_name(p.segment, p.offset),
             ))
 
         for pub in self.public_symbols():
@@ -466,6 +494,7 @@ class PDB:
                 rva=self._rva(pub.segment, pub.offset),
                 code_size=None,
                 source="public",
+                module=module_name(pub.segment, pub.offset),
             ))
 
         return sorted(seen.values(), key=lambda f: (f.rva is None, f.rva or 0, f.name))
