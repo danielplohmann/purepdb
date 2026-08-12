@@ -275,6 +275,34 @@ def omap_stream(entries: list[tuple[int, int]]) -> bytes:
     return b"".join(struct.pack("<II", rva, rva_to) for rva, rva_to in entries)
 
 
+def numeric_leaf(value: int) -> bytes:
+    """Encode an integer the way CodeView does: small values inline, larger
+    ones behind an LF_* tag naming the width."""
+    if 0 <= value < 0x8000:
+        return struct.pack("<H", value)
+    for leaf, fmt in ((0x8000, "<b"), (0x8002, "<H"), (0x8001, "<h"),
+                      (0x8004, "<I"), (0x8003, "<i"),
+                      (0x800A, "<Q"), (0x8009, "<q")):
+        try:
+            return struct.pack("<H", leaf) + struct.pack(fmt, value)
+        except struct.error:
+            continue
+    raise ValueError(f"{value} does not fit any numeric leaf")
+
+
+def constant(name: str, value: int, type_index: int = 0x74,
+             raw_value: bytes | None = None) -> bytes:
+    """S_CONSTANT. `raw_value` overrides the encoding, for unknown-leaf tests."""
+    leaf = numeric_leaf(value) if raw_value is None else raw_value
+    payload = struct.pack("<I", type_index) + leaf + name.encode() + b"\x00"
+    return make_record(0x1107, payload)
+
+
+def udt(name: str, type_index: int = 0x1004) -> bytes:
+    payload = struct.pack("<I", type_index) + name.encode() + b"\x00"
+    return make_record(0x1108, payload)
+
+
 def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74) -> bytes:
     payload = struct.pack("<IIH", type_index, offset, segment) + name.encode() + b"\x00"
     return make_record(0x110D, payload)

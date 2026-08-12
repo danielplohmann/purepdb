@@ -11,7 +11,10 @@ caller read an unexplained empty list.
 
 from .msf import MsfFile, MsfError, PdbError, UnsupportedPdbError
 from .pdb import PDB, Diagnostics, Function, PdbInfo
-from .codeview import DataSymbol, ProcRef, ProcSymbol, PublicSymbol, Truncation
+from .codeview import (
+    Constant, DataSymbol, ProcRef, ProcSymbol, PublicSymbol, Truncation,
+    UserDefinedType,
+)
 from .dbi import ModuleInfo, SectionContribution
 from .gsi import PublicsStream
 from .omap import OmapTable
@@ -33,6 +36,8 @@ __all__ = [
     "Truncation",
     "ModuleInfo",
     "SectionContribution",
+    "Constant",
+    "UserDefinedType",
     "PublicsStream",
     "OmapTable",
     "Section",

@@ -19,6 +19,7 @@ https://llvm.org/docs/PDB/CodeViewSymbols.html
 from __future__ import annotations
 
 import collections
+import struct
 from dataclasses import dataclass
 
 from .reader import Reader
@@ -141,6 +142,59 @@ class ProcSymbol:
     @property
     def is_global(self) -> bool:
         return self.kind in (S_GPROC32, S_GPROC32_ID)
+
+
+# Numeric leaves. A value below LF_NUMERIC *is* the value; at or above it, the
+# tag says what follows. Only the integer leaves are decoded -- reals, complex
+# numbers and the string leaves have no place in a symbol-recovery tool, and
+# skipping one costs a single record rather than the stream, because each
+# record's payload is bounded by its own length field.
+LF_NUMERIC = 0x8000
+_NUMERIC_LEAVES = {
+    0x8000: "<b",  # LF_CHAR
+    0x8001: "<h",  # LF_SHORT
+    0x8002: "<H",  # LF_USHORT
+    0x8003: "<i",  # LF_LONG
+    0x8004: "<I",  # LF_ULONG
+    0x8009: "<q",  # LF_QUADWORD
+    0x800A: "<Q",  # LF_UQUADWORD
+}
+
+
+def parse_numeric(r: Reader) -> "int | None":
+    """Read a numeric leaf, or None for a leaf kind we do not decode.
+
+    On None the reader is left where the leaf started, since its length is
+    exactly what is unknown -- the caller cannot read past it either.
+    """
+    start = r.pos
+    leaf = r.u16()
+    if leaf < LF_NUMERIC:
+        return leaf
+    fmt = _NUMERIC_LEAVES.get(leaf)
+    if fmt is None:
+        r.seek(start)
+        return None
+    return struct.unpack(fmt, r.bytes(struct.calcsize(fmt)))[0]
+
+
+@dataclass
+class Constant:
+    """S_CONSTANT: a named compile-time value -- enumerator, `const`, `#define`
+    that survived as a symbol."""
+
+    name: str
+    value: int
+    type_index: int
+
+
+@dataclass
+class UserDefinedType:
+    """S_UDT: a name bound to a type index. The type itself lives in TPI, which
+    purepdb does not read, so `type_index` is carried uninterpreted."""
+
+    name: str
+    type_index: int
 
 
 @dataclass
@@ -338,6 +392,49 @@ def extract_proc_refs(data: bytes) -> list[ProcRef]:
             out.append(parse_proc_ref(rec.kind, rec.payload))
         except EOFError:
             continue  # shorter than the kind requires; skip it, keep the rest
+    return out
+
+
+def parse_constant(payload: bytes) -> "Constant | None":
+    """None when the value uses a numeric leaf we do not decode: the name sits
+    after the value, so an unknown length means the name cannot be found."""
+    r = Reader(payload)
+    type_index = r.u32()
+    value = parse_numeric(r)
+    if value is None:
+        return None
+    return Constant(name=r.cstring(), value=value, type_index=type_index)
+
+
+def parse_udt(payload: bytes) -> UserDefinedType:
+    r = Reader(payload)
+    type_index = r.u32()
+    return UserDefinedType(name=r.cstring(), type_index=type_index)
+
+
+def extract_constants(data: bytes) -> list[Constant]:
+    out = []
+    for rec in iter_records(data):
+        if rec.kind != S_CONSTANT:
+            continue
+        try:
+            constant = parse_constant(rec.payload)
+        except EOFError:
+            continue  # shorter than the kind requires; skip it, keep the rest
+        if constant is not None:
+            out.append(constant)
+    return out
+
+
+def extract_udts(data: bytes) -> list[UserDefinedType]:
+    out = []
+    for rec in iter_records(data):
+        if rec.kind != S_UDT:
+            continue
+        try:
+            out.append(parse_udt(rec.payload))
+        except EOFError:
+            continue
     return out
 
 
