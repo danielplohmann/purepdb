@@ -147,6 +147,7 @@ def _open(rel):
     pytest.param("sqlite/x86/sqlite3.pdb", 81, 368, id="sqlite-x86"),
     pytest.param("sqlite/x64/sqlite3.pdb", 79, 348, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 0, 0, id="rustpe-msvc"),
+    pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 0, 0, id="rustpe-i686"),
 ])
 def test_real_counts_are_stable(rel, n_thunks, n_trampolines):
     pdb = _open(rel)

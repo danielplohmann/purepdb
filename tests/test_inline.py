@@ -301,6 +301,26 @@ def test_every_inlined_range_lands_in_executable_code():
             assert offset + length <= section.virtual_size
 
 
+def test_inline_sites_are_recovered_at_32_bits():
+    """The i686 fixture, where `hash_round` and `mix_pair` are inlined.
+
+    Nothing else in the corpus carries inline sites on a 32-bit target, so
+    without this the annotation walk is only ever exercised at x86_64.
+    """
+    pdb = _open("rustpe32/rust_pe_symbols_i686.pdb")
+    sites = pdb.inline_sites()
+
+    assert len(sites) == 13
+    assert pdb.diagnose().inline_sites == 13
+    assert sum(len(s.ranges) for s in sites) == 60
+    assert {s.name for s in sites} >= {"hash_round", "mix_pair"}
+    for site in sites:
+        start = site.parent_offset
+        end = start + site.parent_code_size
+        for offset, length in site.ranges:
+            assert start <= offset and offset + length <= end, site.name
+
+
 @pytest.mark.parametrize("rel", ["sqlite/x86/sqlite3.pdb", "sqlite/x64/sqlite3.pdb"])
 def test_a_pdb_without_inlining_reports_none(rel):
     pdb = _open(rel)
