@@ -42,13 +42,12 @@ class Function:
     offset: int
     rva: int | None
     code_size: int | None
-    source: str  # "proc" or "public"
+    source: str  # "proc", "public" or "thunk"
     module: str | None = None
     """The linker input this address came from, per the Section Contribution
     substream: an `.obj` path, a library member, or `Import:foo.dll` for an
     import thunk. None when the PDB has no usable contribution table, or when
     the address falls in a gap between contributions."""
-    source: str  # "proc", "public" or "thunk"
     aliases: list[str] = field(default_factory=list)
     """Other names sharing this entry point, in discovery order.
 
