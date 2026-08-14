@@ -159,13 +159,13 @@ class Diagnostics:
     section_contributions: int = 0
     """Entries in the Section Contribution substream. Zero means `Function.module`
     is None throughout -- the substream is absent, or a version we do not read."""
+    inline_sites: int = 0
+    """Inlined bodies found in the module streams. They have no entry point and
+    so never reach `functions()`; `inline_sites()` is where they live."""
 
     @property
     def truncated_streams(self) -> int:
         return len(self.truncations)
-    inline_sites: int = 0
-    """Inlined bodies found in the module streams. They have no entry point and
-    so never reach `functions()`; `inline_sites()` is where they live."""
 
     @property
     def managed_proc_records(self) -> int:
