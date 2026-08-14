@@ -9,7 +9,9 @@ in every fixture. So the layout has to be rebuilt.
 The rule that rebuilds it is checked here against the three fixtures, which
 carry both the Section Map *and* the real section headers: the reconstruction
 must reproduce the real addresses exactly. That is the evidence, since no
-fixture actually lacks slot 5 -- see issue #9.
+fixture actually lacks slot 5 -- see issue #9 -- except
+``rustpe32/rust_pe_symbols_i686_no_slot5.pdb``, which is checked the same way
+via ``test_groundtruth.py``.
 """
 
 import struct
@@ -272,6 +274,33 @@ def test_real_pdbs_keep_every_address_without_the_section_headers(rel):
 
     original = PDB.from_bytes(data)
     stripped = PDB.from_bytes(_without_section_headers(data))
+
+    assert not stripped.diagnose().has_section_headers
+    assert stripped.sections == []
+    assert len(stripped.derived_sections) == len(original.sections)
+
+    assert original.functions(), "the fixture must have functions to compare"
+    before = {(f.segment, f.offset): f.rva for f in original.functions()}
+    after = {(f.segment, f.offset): f.rva for f in stripped.functions()}
+    assert before == after
+    assert all(rva is not None for rva in after.values())
+
+
+@pytest.mark.parametrize("rel", [
+    "rustpe32/rust_pe_symbols_i686_no_slot5.pdb",
+])
+def test_fixture_without_section_headers_keeps_every_address(rel):
+    """The committed rustpe32 fixture (issue #25)."""
+    from pathlib import Path
+
+    data_dir = Path(__file__).resolve().parent / "data"
+    path = data_dir / rel
+    source = data_dir / "rustpe32/rust_pe_symbols_i686.pdb"
+    if not path.exists() or not source.exists():
+        pytest.skip(f"groundtruth fixture missing: {rel}")
+
+    original = PDB.from_bytes(source.read_bytes())
+    stripped = PDB.open(str(path))
 
     assert not stripped.diagnose().has_section_headers
     assert stripped.sections == []

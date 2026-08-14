@@ -10,7 +10,8 @@ in two layers: PDBs built from scratch with an original section table in slot
 10 and an address map in slot 4, and -- at the end of this file -- a real
 linker-produced PDB re-serialised with those two streams added, so that the
 container, the DBI stream and every symbol record are the genuine article and
-only the tables are ours.
+only the tables are ours. ``tests/data/xp/ntdll.pdb`` is a third layer: a
+genuine BBT-processed file from Microsoft's symbol server (Windows XP SP2).
 """
 
 import struct
@@ -400,3 +401,25 @@ def test_a_real_pdb_with_an_address_map_translates_every_function():
     assert after == {key: rva + delta for key, rva in before.items()
                      if rva is not None}
     assert translated.diagnose().omap_entries == 1
+
+
+@pytest.mark.parametrize("rel,n_omap,n_functions,n_publics", [
+    pytest.param("xp/ntdll.pdb", 37118, 2213, 2902, id="xp-ntdll"),
+])
+def test_real_bbt_omap_fixture(rel, n_omap, n_functions, n_publics):
+    """A genuine BBT-processed PDB from Microsoft's symbol server (issue #25)."""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent / "data" / rel
+    if not path.exists():
+        pytest.skip(f"groundtruth fixture missing: {rel}")
+    pdb = PDB.open(str(path))
+    d = pdb.diagnose()
+
+    assert d.omap_entries == n_omap
+    assert d.has_original_sections
+    assert d.has_section_headers
+    assert len(pdb.functions()) == n_functions
+    assert d.public_records == n_publics
+    assert d.proc_records == 0
+    assert d.warnings == []
