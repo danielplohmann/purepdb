@@ -156,6 +156,12 @@ class DbiStream:
     section_map: list[SectionMapEntry] = field(default_factory=list)
     section_contributions: list[SectionContribution] = field(default_factory=list)
     dbg_header: list[int] = field(default_factory=list)  # optional dbg header slots
+    module_list_stopped_at: int | None = None
+    """Byte offset in the ModuleInfo substream where the walk stopped, or None
+    when it consumed the whole substream.
+
+    Non-None means `modules` is short: the modules past that point were never
+    read, and every symbol in their streams is absent."""
 
     def dbg_stream(self, slot: int) -> int:
         """The stream index in an Optional Debug Header slot, or 0xFFFF."""
@@ -211,7 +217,9 @@ class DbiStream:
         )
 
         off = _HEADER.size
-        self.modules = _parse_module_list(data[off : off + modinfo_size])
+        self.modules, self.module_list_stopped_at = _parse_module_list(
+            data[off : off + modinfo_size]
+        )
         off += modinfo_size
         self.section_contributions = _parse_section_contributions(
             data[off : off + seccontrib_size]
@@ -226,9 +234,17 @@ class DbiStream:
         return self
 
 
-def _parse_module_list(data: bytes) -> list[ModuleInfo]:
+def _parse_module_list(data: bytes) -> tuple[list[ModuleInfo], int | None]:
     """Parse the ModuleInfo substream: a packed array of variable-length
-    records, each ending in two NUL-terminated strings, 4-byte aligned."""
+    records, each ending in two NUL-terminated strings, 4-byte aligned.
+
+    Returns the modules and, when the walk stopped at a record it could not
+    read, the byte offset it stopped at. A short module list is otherwise
+    indistinguishable from a genuinely short one, and every symbol in the
+    modules never reached is simply absent -- so the offset is carried out
+    rather than dropped, the way `codeview.Truncation` carries the same fact
+    for record streams.
+    """
     mods: list[ModuleInfo] = []
     r = Reader(data)
     idx = 0
@@ -259,7 +275,7 @@ def _parse_module_list(data: bytes) -> list[ModuleInfo]:
             # of the substream without its NUL, or the fixed portion is cut
             # short. The modules already read are still good, and stopping keeps
             # a damaged DBI stream from raising out of `PDB.open()`.
-            break
+            return mods, start
         mods.append(
             ModuleInfo(
                 index=idx,
@@ -272,7 +288,7 @@ def _parse_module_list(data: bytes) -> list[ModuleInfo]:
             )
         )
         idx += 1
-    return mods
+    return mods, None
 
 
 def _parse_section_contributions(data: bytes) -> list[SectionContribution]:

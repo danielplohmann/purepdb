@@ -41,8 +41,27 @@ resolve *differently* would be breaking, and would say so here.
   and fails if anything but `PdbError` escapes.
 - Continuous integration: tests on 3.11–3.14 plus macOS and Windows, ruff, ty,
   an sdist round-trip, and fuzzing on every change and nightly.
+- `diagnose()` reports the globals' procedure index (`Diagnostics.proc_refs`)
+  and warns when it disagrees with the module walk — the two describe the same
+  set, so a disagreement means one is being read incompletely.
+- `diagnose()` reports how much C13 line info a PDB carries
+  (`Diagnostics.line_bytes`, `has_string_table`) and warns when the data is
+  present but `/names` is not, which is the one way `lines()` yields nothing
+  from a file that plainly has line info.
+- `diagnose()` reports a module list that stopped at a record it could not read
+  (`Diagnostics.module_list_stopped_at`), rather than a short list looking like
+  a genuinely short one.
 
 ### Changed
+
+- The truncation warning distinguishes a stream that abandoned readable bytes
+  from one that merely ran out with fewer than four left. Only the first loses
+  symbols; the second is padding or a file cut inside a header, and the two are
+  indistinguishable. `codeview.Truncation.ragged_tail` carries the difference.
+- The Section Map reconstruction now stands down for the original section table
+  in slot 10, not only for slot 5. Addresses are unaffected — the resolver
+  already preferred the real table — but `diagnose()` no longer reports a
+  reconstruction on a file whose addresses came from the file.
 
 - **Requires Python 3.11 or newer.** 3.9 and 3.10 are no longer supported;
   3.9 has been end-of-life since October 2025.

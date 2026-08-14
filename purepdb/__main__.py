@@ -81,9 +81,12 @@ def main(argv: list[str]) -> int:
     if cmd == "diagnose":
         d = pdb.diagnose()
         print(f"modules            : {d.modules} ({d.modules_with_symbols} with symbols)")
-        print(f"proc records       : {d.proc_records}")
+        print(f"proc records       : {d.proc_records} "
+              f"({d.proc_refs} in the globals index)")
         print(f"public records     : {d.public_records}")
         print(f"inline sites       : {d.inline_sites}")
+        print(f"line info          : {d.line_bytes} bytes"
+              f"{'' if d.has_string_table else ', /names MISSING'}")
         print(f"section headers    : {'yes' if d.has_section_headers else 'NO'}")
         print(f"truncated streams  : {d.truncated_streams}")
         print(f"malformed records  : {d.malformed_records}")

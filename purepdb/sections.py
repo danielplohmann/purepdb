@@ -170,8 +170,16 @@ def sections_from_map(entries: list[SectionMapEntry],
     alignment unit in, and each subsequent one at the next multiple of the
     alignment past the end of the last. That reproduces the real table exactly
     on every fixture, which is the evidence this is the right rule; it is still
-    a reconstruction, and an image built with a non-default SectionAlignment
-    would come out wrong.
+    a reconstruction, and it rests on two things the PDB does not record, so
+    neither can be checked from the file:
+
+    * the image's `SectionAlignment` is the default `0x1000`;
+    * `SizeOfHeaders` fits inside one alignment unit, which is what puts the
+      first segment at `alignment` rather than further in. That holds until
+      roughly 90 sections, past which the linker starts the first one a page
+      later and every address here is low by exactly that.
+
+    An image that breaks either assumption comes out wrong rather than short.
 
     Names are not recoverable: `SectionName` indexes a table these PDBs do not
     populate (it is 0xFFFF throughout), so segments are named by index.
