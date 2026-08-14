@@ -41,7 +41,7 @@ S_LPROCREF = 0x1127    # ... and for a static one
 
 PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID})
 _DATA_KINDS = frozenset({S_LDATA32, S_GDATA32})
-_PROC_REF_KINDS = frozenset({S_PROCREF, S_LPROCREF})
+PROC_REF_KINDS = frozenset({S_PROCREF, S_LPROCREF})
 
 # Kinds we don't decode but can name, so a diagnostic report reads as something
 # other than a list of hex numbers. Not exhaustive and not meant to be.
@@ -435,6 +435,15 @@ class Truncation:
 
     offset: int  # byte offset of the record that could not be read
     reason: str
+    ragged_tail: bool = False
+    """True when the walk ran out with fewer than 4 bytes left, rather than
+    abandoning readable ones.
+
+    Those bytes cannot hold a record header, so nothing is recoverable either
+    way -- but nothing is provably lost either. It is padding from a producer
+    that does not 4-align, or a file cut inside a header, and the two are
+    indistinguishable from here. The other two shapes *do* abandon readable
+    bytes, and callers should say so differently."""
 
 
 def iter_records(data: bytes, start: int = 0, *,
@@ -476,7 +485,8 @@ def iter_records(data: bytes, start: int = 0, *,
         yield RawRecord(kind, payload, rec_start)
     if r.remaining() > 0 and truncation is not None:
         truncation.append(Truncation(
-            r.pos, f"{r.remaining()} trailing bytes are too few for a record header"
+            r.pos, f"{r.remaining()} trailing bytes are too few for a record header",
+            ragged_tail=True,
         ))
 
 
@@ -581,7 +591,7 @@ def extract_proc_refs(data: bytes) -> list[ProcRef]:
     """
     out: list[ProcRef] = []
     for rec in iter_records(data):
-        if rec.kind not in _PROC_REF_KINDS:
+        if rec.kind not in PROC_REF_KINDS:
             continue
         try:
             out.append(parse_proc_ref(rec.kind, rec.payload))

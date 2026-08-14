@@ -270,6 +270,36 @@ def test_the_original_section_table_alone_still_resolves_addresses():
     assert not any("every rva is None" in w for w in pdb.diagnose().warnings)
 
 
+def test_the_section_map_rebuild_stands_down_for_the_original_table():
+    """Slot 10 present, slot 5 absent, and a Section Map sitting there too.
+
+    Either real table makes the rebuild unnecessary, and reporting a
+    reconstruction on a file whose addresses came from a real table is a false
+    statement about where the numbers came from.
+    """
+    from tests._synth import section_map
+
+    module_syms = module_sym_stream(gproc32("first", 1, 0x000))
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_syms))
+    dbg = [0xFFFF] * 11
+    dbg[4], dbg[10] = 8, 9  # address map and original sections, no slot 5
+    sec_map = section_map([(0x1 | 0x4, 1, 0x2000), (0x200, 0, 0xFFFFFFFF)])
+    streams = [
+        b"", struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16, b"",
+        dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
+                   dbg_header=dbg, sec_map=sec_map),
+        publics_hash_stream([]), module_syms, b"",
+        pub32("first", 1, 0x000), omap_stream(MOVED), b"".join(ORIGINAL),
+    ]
+    pdb = PDB.from_bytes(build_msf(streams))
+
+    assert pdb.dbi.section_map, "the map is present, it is just not needed"
+    assert pdb.derived_sections == []
+    assert pdb.diagnose().derived_sections == 0
+    assert pdb.functions()[0].rva == 0x8100  # unchanged by standing down
+
+
 def test_cli_diagnose_mentions_the_address_map(tmp_path, capsys):
     from purepdb.__main__ import main
 

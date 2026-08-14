@@ -166,6 +166,22 @@ class Diagnostics:
     inline_sites: int = 0
     """Inlined bodies found in the module streams. They have no entry point and
     so never reach `functions()`; `inline_sites()` is where they live."""
+    proc_refs: int = 0
+    """S_PROCREF/S_LPROCREF records: the globals' index of every procedure.
+
+    The same set `proc_records` counts, reached by a different route, so the
+    two agreeing is an integrity check on both."""
+    line_bytes: int = 0
+    """Bytes of C13 line info across all module streams. Non-zero with
+    `has_string_table` false means `lines()` yields nothing despite the data
+    being present."""
+    has_string_table: bool = False
+    """Whether the `/names` stream was found, which is what turns a file-name
+    offset in the line tables into a path."""
+    module_list_stopped_at: int | None = None
+    """Byte offset where the ModuleInfo walk stopped, or None when it read the
+    whole substream. Non-None means `modules` is short and the symbols in the
+    modules never reached are missing."""
 
     @property
     def truncated_streams(self) -> int:
@@ -229,12 +245,25 @@ class Diagnostics:
                 f"they claim to be and were skipped; the symbols they carried "
                 f"are missing"
             )
-        if self.truncations:
-            where, first = self.truncations[0]
+        # Two different claims, so two different sentences. Abandoning readable
+        # bytes loses symbols; running out with fewer than four left cannot,
+        # since no record fits in them -- see `codeview.Truncation.ragged_tail`.
+        abandoned = [t for t in self.truncations if not t[1].ragged_tail]
+        ragged = [t for t in self.truncations if t[1].ragged_tail]
+        if abandoned:
+            where, first = abandoned[0]
             out.append(
-                f"{self.truncated_streams} record stream(s) stopped early; "
+                f"{len(abandoned)} record stream(s) stopped early; "
                 f"every symbol after that point is missing. First: {where} at "
                 f"byte {first.offset:#x} ({first.reason})"
+            )
+        if ragged:
+            where, first = ragged[0]
+            out.append(
+                f"{len(ragged)} record stream(s) end with too few bytes for a "
+                f"record header; usually padding from a producer that does not "
+                f"4-align, but a file cut inside a header looks identical. "
+                f"First: {where} at byte {first.offset:#x} ({first.reason})"
             )
         if self.omap_entries and not self.has_original_sections:
             out.append(
@@ -251,6 +280,27 @@ class Diagnostics:
                 "original-to-final address map in slot 4 is missing: every rva "
                 "is in the pre-optimisation address space and does not match "
                 "the shipped image"
+            )
+        if self.module_list_stopped_at is not None:
+            out.append(
+                f"the module list stopped at byte "
+                f"{self.module_list_stopped_at:#x} of the ModuleInfo substream: "
+                f"the {self.modules} module(s) before it were read and any after "
+                f"it were not, so their symbols are missing"
+            )
+        if self.proc_refs and self.proc_refs != self.proc_records:
+            short = "module walk" if self.proc_refs > self.proc_records else "globals index"
+            out.append(
+                f"the globals index names {self.proc_refs} procedures and the "
+                f"module streams hold {self.proc_records}; the {short} is short "
+                f"by {abs(self.proc_refs - self.proc_records)}. Both describe "
+                f"the same set, so one of them is being read incompletely"
+            )
+        if self.line_bytes and not self.has_string_table:
+            out.append(
+                f"{self.line_bytes} bytes of C13 line info are present but the "
+                f"/names stream is not, so file-name offsets cannot be resolved "
+                f"and lines() yields nothing"
             )
         return out
 
@@ -303,14 +353,20 @@ class PDB:
         idx = self.dbi.section_header_stream
         if self.msf.is_valid_stream(idx):
             self._sections = _table_or_none(self.msf.read_stream(idx))
-        if self._sections is None and self.dbi.section_map:
-            derived = sections_from_map(self.dbi.section_map)
-            if derived:
-                self._derived_sections = SectionTable(derived)
 
         idx = self.dbi.original_section_header_stream
         if self.msf.is_valid_stream(idx):
             self._original_sections = _table_or_none(self.msf.read_stream(idx))
+
+        # Both real tables are read first, because either one makes the rebuild
+        # unnecessary: it is a reconstruction, and `diagnose()` reports it as
+        # one. Building it beside a table nobody needs it instead of would
+        # report a reconstruction on a file whose addresses came from the file.
+        if (self._sections is None and self._original_sections is None
+                and self.dbi.section_map):
+            derived = sections_from_map(self.dbi.section_map)
+            if derived:
+                self._derived_sections = SectionTable(derived)
 
         idx = self.dbi.omap_from_src_stream
         if self.msf.is_valid_stream(idx):
@@ -720,7 +776,9 @@ class PDB:
         with_symbols = 0
         truncations: list[tuple[str, codeview.Truncation]] = []
         malformed = 0
+        line_bytes = 0
         for mod in self.dbi.modules:
+            line_bytes += len(self.module_c13_bytes(mod))
             body = self.module_symbol_bytes(mod)
             if not body:
                 continue
@@ -733,12 +791,18 @@ class PDB:
                 truncations.append((f"module {mod.index} ({mod.module_name})", t))
 
         idx = self.dbi.symrecord_stream_index
+        proc_refs = 0
         if self.msf.is_valid_stream(idx):
             symrecords = self.msf.read_stream(idx)
             malformed += codeview.count_malformed_records(symrecords)
             t = codeview.find_truncation(symrecords)
             if t is not None:
                 truncations.append(("the symbol-record stream", t))
+            # Counted from the same read rather than through `proc_refs()`,
+            # which would parse every ref to answer how many there are.
+            symrecord_kinds = codeview.count_kinds(symrecords)
+            proc_refs = sum(symrecord_kinds.get(k, 0)
+                            for k in codeview.PROC_REF_KINDS)
 
         return Diagnostics(
             modules=len(self.dbi.modules),
@@ -754,6 +818,10 @@ class PDB:
             has_original_sections=self._original_sections is not None,
             section_contributions=len(self._contributions),
             inline_sites=kinds.get(codeview.S_INLINESITE, 0),
+            proc_refs=proc_refs,
+            line_bytes=line_bytes,
+            has_string_table=self.string_table() is not None,
+            module_list_stopped_at=self.dbi.module_list_stopped_at,
         )
 
     def _is_code(self, segment: int) -> bool:

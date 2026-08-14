@@ -212,3 +212,100 @@ def test_real_pdbs_are_not_truncated(rel):
     d = PDB.open(str(path)).diagnose()
     assert d.truncations == []
     assert d.malformed_records == 0
+
+
+# --- a ragged tail is not an abandoned walk ---------------------------------
+
+def test_a_ragged_tail_is_flagged_and_an_abandoned_walk_is_not():
+    """The two shapes make different claims, so they carry different flags.
+
+    Fewer than 4 bytes left cannot hold a record header, so nothing is provably
+    lost -- it is padding, or a file cut inside a header, and those look the
+    same from here. A corrupt length *does* abandon readable bytes.
+    """
+    ragged = codeview.find_truncation(pub32("first", 1, 0x10) + b"\x00\x00")
+    assert ragged is not None and ragged.ragged_tail
+
+    corrupt = struct.pack("<HH", 0, codeview.S_PUB32) + b"\x00" * 12
+    abandoned = codeview.find_truncation(pub32("first", 1, 0x10) + corrupt)
+    assert abandoned is not None and not abandoned.ragged_tail
+
+
+def test_the_warning_for_a_ragged_tail_does_not_claim_missing_symbols():
+    pdb = _pdb(gproc32("real", 1, 0x10) + b"\x00\x00",
+               symrecords=pub32("real", 1, 0x10))
+
+    d = pdb.diagnose()
+    assert d.truncated_streams == 1
+    warning = "\n".join(d.warnings)
+    assert "too few bytes for a record header" in warning
+    assert "usually padding" in warning
+    assert "every symbol after that point is missing" not in warning
+    assert [p.name for p in pdb.module_procs()] == ["real"]
+
+
+def test_an_abandoned_walk_still_says_symbols_are_missing():
+    corrupt = struct.pack("<HH", 1, codeview.S_GPROC32) + b"\x00" * 12
+    pdb = _pdb(gproc32("real", 1, 0x10) + corrupt + gproc32("lost", 1, 0x20),
+               symrecords=pub32("real", 1, 0x10))
+
+    warning = "\n".join(pdb.diagnose().warnings)
+    assert "every symbol after that point is missing" in warning
+    assert "usually padding" not in warning
+
+
+def test_both_shapes_at_once_are_reported_separately():
+    """One stream abandoned, one ragged: two sentences, one count each."""
+    corrupt = struct.pack("<HH", 0, codeview.S_GPROC32) + b"\x00" * 12
+    pdb = _pdb(gproc32("real", 1, 0x10) + corrupt,
+               symrecords=pub32("first", 1, 0x10) + b"\x00\x00")
+
+    d = pdb.diagnose()
+    assert d.truncated_streams == 2
+    warnings = [w for w in d.warnings if "record stream(s)" in w]
+    assert len(warnings) == 2
+    assert sum("1 record stream(s)" in w for w in warnings) == 2
+
+
+# --- a module list that stops early -----------------------------------------
+
+def _truncated_module_list() -> bytes:
+    """Two module records, the second with its object name unterminated."""
+    good = module_info("first.obj", "first.obj", sym_stream=5, sym_byte_size=0)
+    cut = module_info("second.obj", "second.obj", sym_stream=6, sym_byte_size=0)
+    # Drop the trailing NUL and padding, so the last name runs to the end.
+    return good + cut.rstrip(b"\x00")
+
+
+def test_a_module_list_that_stops_early_is_reported():
+    """The modules before the damage survive; the walk says where it stopped."""
+    streams = [
+        b"",
+        struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=7,
+                   module_list=_truncated_module_list(),
+                   dbg_header=[0xFFFF] * 5 + [6]),
+        publics_hash_stream([]),
+        b"",
+        section_header(".text", 0x1000),
+        b"",
+    ]
+    pdb = PDB.from_bytes(build_msf(streams))
+
+    assert [m.module_name for m in pdb.dbi.modules] == ["first.obj"]
+    stopped = pdb.dbi.module_list_stopped_at
+    assert stopped is not None
+
+    d = pdb.diagnose()
+    assert d.module_list_stopped_at == stopped
+    warning = "\n".join(d.warnings)
+    assert "module list stopped" in warning
+    assert hex(stopped) in warning
+
+
+def test_a_whole_module_list_reports_nothing():
+    pdb = _pdb(gproc32("main", 1, 0x10), symrecords=pub32("main", 1, 0x10))
+    assert pdb.dbi.module_list_stopped_at is None
+    assert pdb.diagnose().module_list_stopped_at is None
+    assert not any("module list" in w for w in pdb.diagnose().warnings)

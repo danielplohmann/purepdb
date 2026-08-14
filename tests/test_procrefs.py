@@ -219,3 +219,40 @@ def test_refs_name_the_module_that_defined_the_procedure(rel):
     pdb = _open(rel)
     for ref in pdb.proc_refs():
         assert 0 <= ref.module_index < len(pdb.dbi.modules)
+
+
+# --- diagnose() reports the index, and says when it disagrees ---------------
+
+@pytest.mark.parametrize("rel", FIXTURES)
+def test_the_two_counts_agree_on_every_fixture(rel):
+    """The agreement is the integrity signal, so it belongs in diagnose()."""
+    d = _open(rel).diagnose()
+    assert d.proc_refs == d.proc_records
+    assert not any("globals index" in w for w in d.warnings)
+
+
+def test_a_disagreement_is_named_with_both_counts():
+    """One proc in the module stream, two refs in the globals index.
+
+    A PDB is not malformed for disagreeing, so this is a warning rather than an
+    error -- but one of the two paths is reading less than the file describes,
+    and that is worth saying.
+    """
+    pdb = _pdb([gproc32("main", 1, 0x10)],
+               symrecords=proc_ref("main", module=1, sym_offset=4)
+               + proc_ref("ghost", module=1, sym_offset=0x40))
+
+    d = pdb.diagnose()
+    assert (d.proc_refs, d.proc_records) == (2, 1)
+    warning = next(w for w in d.warnings if "globals index" in w)
+    assert "2 procedures" in warning
+    assert "hold 1" in warning
+    assert "module walk is short by 1" in warning
+
+
+def test_a_pdb_with_no_refs_at_all_is_not_a_disagreement():
+    """Plenty of PDBs index nothing; only a non-empty index is comparable."""
+    pdb = _pdb([gproc32("main", 1, 0x10)])
+    d = pdb.diagnose()
+    assert d.proc_refs == 0
+    assert not any("globals index" in w for w in d.warnings)

@@ -301,3 +301,47 @@ def test_a_functions_entry_point_has_a_line_at_the_same_address():
     covered = sum(1 for f in procs if (f.segment, f.offset) in line_at)
     assert covered > len(procs) // 2, (
         f"only {covered} of {len(procs)} proc entry points start a line")
+
+
+# --- diagnose() reports line info, and says when it is unusable -------------
+
+@pytest.mark.parametrize("rel", [
+    "sqlite/x86/sqlite3.pdb", "sqlite/x64/sqlite3.pdb",
+    "rustpe/rust_pe_symbols_msvc.pdb", "rustpe32/rust_pe_symbols_i686.pdb",
+])
+def test_diagnose_reports_the_line_info_on_every_fixture(rel):
+    d = _open(rel).diagnose()
+    assert d.line_bytes > 0
+    assert d.has_string_table
+    assert not any("/names" in w for w in d.warnings)
+
+
+def test_line_info_without_the_names_stream_is_warned_about():
+    """The data is in the file, purepdb can see it, and lines() yields nothing.
+
+    That is the silent empty result `diagnose()` exists to explain: without
+    `/names` a file-name offset resolves to no path, so every line is dropped.
+    """
+    raw_names, offsets = names_stream(["", "main.c"])
+    checksums, entry_offsets = file_checksums([(offsets["main.c"], b"")])
+    region = (subsection(c13.DEBUG_S_FILECHECKSUMS, checksums)
+              + subsection(c13.DEBUG_S_LINES,
+                           line_entries(segment=1, base_offset=0x10,
+                                        file_entry=entry_offsets[0],
+                                        entries=[(0, 7, True)])))
+    pdb = _pdb(c13_region=region, raw_names=raw_names, name_streams={})
+
+    assert list(pdb.lines()) == []
+    d = pdb.diagnose()
+    assert d.line_bytes == len(region)
+    assert not d.has_string_table
+    warning = next(w for w in d.warnings if "/names" in w)
+    assert str(len(region)) in warning
+
+
+def test_a_pdb_with_no_line_info_is_not_warned_about():
+    """Carrying no line info is ordinary, not damage."""
+    pdb = _pdb(name_streams={})
+    d = pdb.diagnose()
+    assert d.line_bytes == 0
+    assert not any("/names" in w for w in d.warnings)
