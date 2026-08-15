@@ -6,11 +6,15 @@ a time, and that counts and warnings stay on stderr so a redirected stdout
 holds records and nothing else.
 """
 
+import os
 import struct
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from purepdb import c13, codeview
+from purepdb import PDB, MsfError, c13, codeview
 from purepdb.__main__ import _COMMANDS, main
 from tests._synth import (
     build_msf,
@@ -296,3 +300,128 @@ def test_an_unresolvable_address_is_not_printed_as_a_number(tmp_path, capsys):
     assert out == ["    ??????  main_retry"]
     assert any("no section-header stream" in line for line in err), (
         "an unresolved listing must say why")
+
+
+# --- the ways a process can go wrong, rather than a PDB ---------------------
+
+def test_a_stream_that_fails_mid_listing_is_reported_not_raised(sample, capsys,
+                                                                monkeypatch):
+    """A stream can be unreadable without the open having said so.
+
+    `PDB.open` reads the DBI stream and nothing else, so a nil or unmapped
+    stream -- what a real MSF writes for one that was deleted -- surfaces at
+    the moment a listing reaches it.
+    """
+    def unreadable(_pdb):
+        raise MsfError("stream 7 is a nil stream")
+
+    monkeypatch.setitem(_COMMANDS, "labels", (unreadable, "labels", "rva  name"))
+    assert main(["purepdb", "labels", sample]) == 1
+    captured = capsys.readouterr()
+    assert "error:" in captured.err and "nil stream" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_a_stream_that_fails_in_the_warning_step_is_reported_too(sample, capsys,
+                                                                 monkeypatch):
+    """The subtle half: `diagnose()` reads streams the listing never touched,
+    so it can fail on a file that listed perfectly well -- with the records
+    already printed."""
+    def unreadable(_self):
+        raise MsfError("stream 1 is a nil stream")
+
+    monkeypatch.setattr(PDB, "diagnose", unreadable)
+    assert main(["purepdb", "labels", sample]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "0x00001050  main_retry\n", "the listing still ran"
+    assert "error:" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_a_closed_pipe_is_not_an_error(sample, capsys, monkeypatch):
+    """`purepdb lines big.pdb | head -3` closes the pipe on the third line.
+
+    Exercised here by raising what the write would raise, because a real pipe
+    race is not something to put in a suite.
+    """
+    def closes_early(_pdb):
+        print("0x00001000  first")
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setitem(_COMMANDS, "labels", (closes_early, "labels", "rva  name"))
+    assert main(["purepdb", "labels", sample]) == 141
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_ctrl_c_is_not_a_traceback(monkeypatch):
+    from purepdb import __main__ as entry
+
+    def interrupted(_argv):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(entry, "main", interrupted)
+    assert entry.cli() == 130
+
+
+def test_control_characters_in_a_name_are_escaped(tmp_path, capsys):
+    """A name is untrusted input: a newline in one would put a record on two
+    lines, and an escape sequence would drive the terminal."""
+    records = (gproc32("main", 1, 0x40)
+               + label32("evil\nsecond\x1b[31mline", 1, 0x50))
+    module_stream = module_sym_stream(records)
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    path = tmp_path / "hostile.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [7]),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+        section_header(".text", 0x1000, 0x10000),
+    ]))
+
+    out, _err = _run(capsys, "labels", str(path))
+    assert out == [r"0x00001050  evil\x0asecond\x1b[31mline"]
+
+
+def test_a_console_that_cannot_encode_a_name_does_not_kill_the_listing(tmp_path):
+    """An undecodable byte in a name becomes U+FFFD, which cp1252 cannot encode.
+
+    Run as a subprocess because it is the console encoding that is under test,
+    and pytest's capture replaces it.
+    """
+    # Built by hand: the name is not valid UTF-8, which the string builders
+    # cannot express and a real damaged PDB has no trouble carrying.
+    undecodable = make_record(
+        codeview.S_LABEL32,
+        struct.pack("<IHB", 0x50, 1, 0) + b"caf\xff\x00")
+    records = gproc32("main", 1, 0x40) + undecodable
+    module_stream = module_sym_stream(records)
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    path = tmp_path / "unencodable.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [7]),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+        section_header(".text", 0x1000, 0x10000),
+    ]))
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "purepdb", "labels", str(path)],
+        capture_output=True, text=True,
+        env={**os.environ, "PYTHONIOENCODING": "ascii"},
+        cwd=Path(__file__).resolve().parent.parent,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert "0x00001050" in proc.stdout

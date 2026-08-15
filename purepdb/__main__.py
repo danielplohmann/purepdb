@@ -4,14 +4,19 @@ Every listing is one record per line with stable leading columns, so `grep`,
 `sort` and `awk` work on the output directly. Record counts and warnings go to
 stderr, so a redirected stdout holds records and nothing else.
 
-Names are printed exactly as the PDB stores them -- decorated, mangled, or
-empty. An address the PDB cannot resolve prints as `??????` rather than as a
-number that would be wrong.
+Names are printed as the PDB stores them -- decorated, mangled, or empty --
+except that control characters are escaped, since a name is untrusted input
+from the file: one containing a newline would break the one-record-per-line
+contract, and one containing an escape sequence would drive the terminal. An
+address the PDB cannot resolve prints as `??????` rather than as a number that
+would be wrong.
 """
 
 from __future__ import annotations
 
 import collections
+import contextlib
+import os
 import sys
 from collections.abc import Callable
 
@@ -25,6 +30,17 @@ NO_RVA = "    ??????"
 # nothing in them, and an inline site has no name when the PDB has no IPI
 # stream. Printing that as a blank would silently shorten the line.
 NO_NAME = "?"
+
+# C0 and C1 control characters, and DEL. Escaped rather than stripped so the
+# line still says what the record holds, and by codepoint rather than through
+# `unicode_escape`, which would also mangle the legitimate non-ASCII in a
+# path or a Rust symbol.
+_CONTROL = {c: f"\\x{c:02x}" for c in [*range(0x20), 0x7F, *range(0x80, 0xA0)]}
+
+
+def _text(value: str) -> str:
+    """A name or path, safe to print on one line of a terminal."""
+    return value.translate(_CONTROL)
 
 
 def _guid_str(g: bytes) -> str:
@@ -92,7 +108,8 @@ def _functions(pdb: PDB) -> int:
     for f in fns:
         size = f"{f.code_size:#x}" if f.code_size is not None else "-"
         extra = f"  (+{len(f.aliases)} alias)" if f.aliases else ""
-        print(f"{_rva(f.rva)}  {f.source:7s}  size={size:6s}  {f.name}{extra}")
+        print(f"{_rva(f.rva)}  {f.source:7s}  size={size:6s}  "
+              f"{_text(f.name)}{extra}")
     return len(fns)
 
 
@@ -100,7 +117,7 @@ def _publics(pdb: PDB) -> int:
     pubs = pdb.public_symbols()
     for p in pubs:
         kind = "func" if p.is_function else "data"
-        print(f"seg={p.segment} off={p.offset:#x}  [{kind}]  {p.name}")
+        print(f"seg={p.segment} off={p.offset:#x}  [{kind}]  {_text(p.name)}")
     return len(pubs)
 
 
@@ -108,7 +125,8 @@ def _data(pdb: PDB) -> int:
     symbols = pdb.data_symbols()
     for d in symbols:
         scope = "global" if d.is_global else "static"
-        print(f"{_rva(pdb.to_rva(d.segment, d.offset))}  {scope:7s}  {d.name}")
+        print(f"{_rva(pdb.to_rva(d.segment, d.offset))}  {scope:7s}  "
+              f"{_text(d.name)}")
     return len(symbols)
 
 
@@ -122,14 +140,14 @@ def _sections(pdb: PDB) -> int:
     sections = pdb.sections or pdb.derived_sections
     for s in sections:
         print(f"{s.virtual_address:#010x}  size={s.virtual_size:<10x} "
-              f"{'X' if s.executable else '-'}  {s.name}")
+              f"{'X' if s.executable else '-'}  {_text(s.name)}")
     return len(sections)
 
 
 def _labels(pdb: PDB) -> int:
     labels = pdb.labels()
     for label in labels:
-        print(f"{_rva(label.rva)}  {label.name or NO_NAME}")
+        print(f"{_rva(label.rva)}  {_text(label.name) or NO_NAME}")
     return len(labels)
 
 
@@ -137,7 +155,7 @@ def _thunks(pdb: PDB) -> int:
     thunks = pdb.thunks()
     for t in thunks:
         print(f"{_rva(pdb.to_rva(t.segment, t.offset))}  size={t.length:<6x} "
-              f"{t.ordinal_name:<10s}  {t.name}")
+              f"{t.ordinal_name:<10s}  {_text(t.name)}")
     return len(thunks)
 
 
@@ -154,7 +172,7 @@ def _inline(pdb: PDB) -> int:
     sites = pdb.inline_sites()
     for site in sites:
         print(f"{_rva(site.rva)}  size={site.code_size:<6x} "
-              f"{site.name or NO_NAME}  <- {site.parent}")
+              f"{_text(site.name) or NO_NAME}  <- {_text(site.parent)}")
     return len(sites)
 
 
@@ -164,7 +182,7 @@ def _lines(pdb: PDB) -> int:
         # 0xFEEFEE and 0xF00F00 are markers rather than line numbers; they are
         # printed as they are stored, since filtering them here would hide a
         # record the PDB does contain.
-        print(f"{_rva(line.rva)}  {line.file}:{line.line}")
+        print(f"{_rva(line.rva)}  {_text(line.file)}:{line.line}")
         total += 1
     return total
 
@@ -172,14 +190,14 @@ def _lines(pdb: PDB) -> int:
 def _constants(pdb: PDB) -> int:
     constants = pdb.constants()
     for c in constants:
-        print(f"{c.value:<#18x}  {c.name}")
+        print(f"{c.value:<#18x}  {_text(c.name)}")
     return len(constants)
 
 
 def _udts(pdb: PDB) -> int:
     udts = pdb.udts()
     for u in udts:
-        print(f"{u.type_index:#010x}  {u.name}")
+        print(f"{u.type_index:#010x}  {_text(u.name)}")
     return len(udts)
 
 
@@ -188,7 +206,7 @@ def _modules(pdb: PDB) -> int:
     counts = collections.Counter(c.module_index
                                  for c in pdb.section_contributions())
     for i, mod in enumerate(pdb.dbi.modules):
-        print(f"{counts.pop(i, 0):8d}  {mod.module_name}")
+        print(f"{counts.pop(i, 0):8d}  {_text(mod.module_name)}")
     # A contribution naming a module the module list does not have is what
     # `module_of()` answers None for. Reporting the total keeps the column sums
     # honest rather than losing those entries between the lines above.
@@ -238,29 +256,69 @@ def main(argv: list[str]) -> int:
         print(usage(), file=sys.stderr)
         return 2
 
+    handler, noun, _columns = entry
     try:
         pdb = PDB.open(path)
+        count = handler(pdb)
+        if noun is not None:
+            print(f"\n{count} {noun}", file=sys.stderr)
+            _warn(pdb)
     except PdbError as exc:
-        # These are expected on a directory of real binaries -- report the
+        # Every stage is inside this, not just the open. A stream the listing
+        # reaches only part-way through can be unreadable -- a nil stream, a
+        # bad block map -- and `diagnose()` reads more streams than the listing
+        # did, so the warning step can raise on a file the listing survived.
+        # These are expected on a directory of real binaries: report the
         # reason, don't hand the user a traceback.
         print(f"error: {path}: {exc}", file=sys.stderr)
         return 1
+    except BrokenPipeError:
+        # Before OSError, which it is a subclass of. `| head` closes the pipe
+        # under us: not an error, and the shell would have reported 141 for
+        # the SIGPIPE this stands in for.
+        _silence_broken_pipe()
+        return 141
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-
-    handler, noun, _columns = entry
-    count = handler(pdb)
-    if noun is not None:
-        print(f"\n{count} {noun}", file=sys.stderr)
-        _warn(pdb)
     return 0
 
 
+def _silence_broken_pipe() -> None:
+    """Keep the interpreter from raising again on the way out.
+
+    Python flushes stdout at exit, which on a closed pipe raises a second time
+    and prints a traceback nothing caught. Pointing the descriptor at the null
+    device is the remedy the standard library documents.
+    """
+    # Suppressed rather than handled: stdout may not be a real file at all --
+    # a test's capture buffer has no descriptor -- and then there is nothing
+    # for the interpreter to flush into either.
+    with contextlib.suppress(OSError, ValueError):
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+
+
 def cli() -> int:
-    """Console-script entry point (see pyproject `[project.scripts]`)."""
-    return main(sys.argv)
+    """Console-script entry point (see pyproject `[project.scripts]`).
+
+    Everything that is about being a process rather than about PDBs lives
+    here, so that `main()` stays callable from a test.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        # A name from a damaged file can hold a character the console cannot
+        # encode -- cp1252 has no U+FFFD, which is what an undecodable byte in
+        # a symbol name becomes. Escaping beats dying with the listing
+        # half-written.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(OSError, ValueError):
+                reconfigure(errors="backslashreplace")
+    try:
+        return main(sys.argv)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)  # finish the line the listing was on
+        return 130
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(cli())
