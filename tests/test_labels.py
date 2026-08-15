@@ -72,6 +72,10 @@ def test_a_short_label_is_counted_as_malformed_rather_than_vanishing():
 
 
 def _pdb(module_records: bytes, publics=()):
+    return PDB.from_bytes(_pdb_bytes(module_records, publics))
+
+
+def _pdb_bytes(module_records: bytes, publics=()) -> bytes:
     module_syms = module_sym_stream(module_records)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
                        sym_byte_size=len(module_syms))
@@ -86,7 +90,7 @@ def _pdb(module_records: bytes, publics=()):
         section_header(".text", 0x1000) + section_header(".data", 0x2000),
         b"".join(publics),
     ]
-    return PDB.from_bytes(build_msf(streams))
+    return build_msf(streams)
 
 
 def test_a_label_resolves_to_an_rva():
@@ -126,6 +130,42 @@ def test_a_pdb_without_labels_reports_none():
     pdb = _pdb(gproc32("main", 1, 0x40))
     assert pdb.labels() == []
     assert pdb.diagnose().labels == 0
+
+
+def test_cli_diagnose_reports_the_label_count(tmp_path, capsys):
+    """The count reaches a terminal, not just the dataclass."""
+    from purepdb.__main__ import main
+
+    path = tmp_path / "labels.pdb"
+    path.write_bytes(_pdb_bytes(label32("retry", 1, 0x40)
+                                + label32("again", 1, 0x50)))
+    assert main(["purepdb", "diagnose", str(path)]) == 0
+
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.startswith("labels"))
+    assert line.endswith(": 2")
+
+
+def test_the_label_types_are_exported_from_the_package():
+    """Both are public API. Reaching `LabelSymbol` through `codeview`, which
+    every other test here does, leaves the package-level exports unasserted."""
+    import purepdb
+    from purepdb import Label, LabelSymbol
+
+    assert (Label, LabelSymbol) == (purepdb.Label, purepdb.LabelSymbol)
+    assert {"Label", "LabelSymbol"} <= set(purepdb.__all__)
+
+
+def test_labels_are_driven_by_the_fuzzer():
+    """`tools/fuzz.py` is where the no-exception-but-PdbError contract is
+    enforced, and it runs outside pytest -- so the only part of it the suite
+    can hold in place is that the entry point is listed there at all."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1]
+              / "tools" / "fuzz.py").read_text(encoding="utf-8")
+
+    assert "pdb.labels()" in source
 
 
 # --- against real linker output ---------------------------------------------
