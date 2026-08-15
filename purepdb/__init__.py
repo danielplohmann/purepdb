@@ -12,6 +12,7 @@ empty list.
 from .codeview import (
     Constant,
     DataSymbol,
+    LabelSymbol,
     ProcRef,
     ProcSymbol,
     PublicSymbol,
@@ -24,7 +25,15 @@ from .ipi import IdTable
 from .msf import MsfError, MsfFile, PdbError, UnsupportedPdbError
 from .names import StringTable
 from .omap import OmapTable
-from .pdb import PDB, Diagnostics, Function, InlineFunction, Line, PdbInfo
+from .pdb import (
+    PDB,
+    Diagnostics,
+    Function,
+    InlineFunction,
+    Label,
+    Line,
+    PdbInfo,
+)
 from .sections import (
     Section,
     SectionMapEntry,
@@ -42,6 +51,8 @@ __all__ = [
     "Function",
     "IdTable",
     "InlineFunction",
+    "Label",
+    "LabelSymbol",
     "Line",
     "ModuleInfo",
     "MsfError",

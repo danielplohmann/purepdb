@@ -51,14 +51,38 @@ first. On sqlite3 x86 that is 438 of 3620 functions, worst case 4 names.
 70157 of them in sqlite3 x86, across 133 files. It is a generator; the file
 names come from the `/names` stream, which `pdb.named_streams()` locates.
 
-CLI:
+CLI — every listing in this README has a subcommand:
 
 ```
-purepdb functions app.pdb    # name + entry-point RVA
-purepdb publics   app.pdb
-purepdb info      app.pdb
-purepdb diagnose  app.pdb    # what the PDB contains, and why a listing is thin
+purepdb functions    app.pdb    # rva  source  size  aliases  name
+purepdb publics      app.pdb    # seg  off  kind  name
+purepdb data         app.pdb    # rva  scope  name
+purepdb labels       app.pdb    # rva  name
+purepdb thunks       app.pdb    # rva  size  ordinal  name
+purepdb trampolines  app.pdb    # rva  size  -> target rva
+purepdb inline       app.pdb    # rva  size  name <TAB> <- parent
+purepdb lines        app.pdb    # rva  file:line
+purepdb constants    app.pdb    # value  name
+purepdb udts         app.pdb    # type-index  name
+purepdb modules      app.pdb    # contributions  module
+purepdb sections     app.pdb    # rva  size  executable  name
+purepdb info         app.pdb    # version, signature, age and GUID
+purepdb diagnose     app.pdb    # what the PDB contains, and why a listing is thin
 ```
+
+`purepdb --help` lists them all. Output is one record per line with stable
+leading columns; counts, warnings and the usage text go to stderr, so a
+redirected stdout holds records and nothing else:
+
+```bash
+purepdb functions app.pdb | awk '$1 != "??????" {print $1}' | sort
+```
+
+A name can contain spaces — `std::rt::lang_start::closure$0<tuple$<> >` is one
+name — so **the name is the last field on its line** and nothing follows it.
+The one line carrying two names, an inline site and the function it was
+inlined into, separates them with a tab, which a name cannot contain because
+control characters in a name are escaped.
 
 ## When a listing comes back short
 
@@ -75,7 +99,7 @@ WARNING: no procedure records in 285 module streams (dominant kinds:
 produce
 ```
 
-The CLI prints these warnings automatically after `functions` and `publics`.
+The CLI prints these warnings to stderr after every listing.
 
 ## Two things worth knowing about publics
 
@@ -115,13 +139,36 @@ On the Rust fixture that is 3797 sites against 248 procedure records — fifteen
 inlined bodies for every function with an entry point, and the largest naming
 gap the parser had.
 
+## Labels
+
+`S_LABEL32` names a code address *inside* a function — an assembly label, an
+exception continuation target, the address an interrupt returns to. It is not
+an entry point, so like a trampoline it stays out of `functions()`: listing one
+would count a body twice.
+
+```python
+for label in pdb.labels():
+    print(hex(label.rva or 0), label.name)
+```
+
+sqlite3 x86 has 1412 of them and x64 1237, every one inside a function body
+purepdb already found, and not one of those 586 distinct names appears in any
+other listing.
+
+Not every producer fills the record in: all 160 in the Rust fixture are twelve
+bytes of fixed fields with an empty name and segment 0. The offset is real, but
+segment 0 names no section, so nothing resolves. They are still reported,
+because the count is what the file says; a caller wanting the useful ones
+filters on `label.rva is not None`.
+
 ## Scope
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
 `S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
-`S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary annotations;
+`S_THUNK32`, `S_TRAMPOLINE`, `S_LABEL32`, `S_INLINESITE` with its binary
+annotations;
 section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
 fallback when that table is absent; OMAP address translation for images whose
 code was moved after linking; the named stream map, the `/names` string table

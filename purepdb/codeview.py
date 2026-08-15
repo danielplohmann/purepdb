@@ -221,13 +221,17 @@ class ProcRef:
 
 # THUNK_ORDINAL values, the tag for the variant data after a thunk's name.
 THUNK_NOTYPE = 0
+# 4 is THUNK_ORDINAL_LOAD and 5 and 6 are the two *trampoline* ordinals, which
+# is what `llvm-pdbutil` calls "unknown load", "tramp incremental" and "branch
+# island". They were named after delay-loading, which no ordinal means.
 THUNK_ORDINAL_NAMES = {
     THUNK_NOTYPE: "notype",
     1: "adjustor",
     2: "vcall",
     3: "pcode",
-    4: "delay-load",
-    5: "delay-load-incremental",
+    4: "load",
+    5: "tramp-incremental",
+    6: "tramp-branchisland",
 }
 
 # TRAMP_* values: which flavour of compiler-generated jump this is.
@@ -253,6 +257,21 @@ class ThunkSymbol:
     @property
     def ordinal_name(self) -> str:
         return THUNK_ORDINAL_NAMES.get(self.ordinal, f"{self.ordinal:#04x}")
+
+
+@dataclass
+class LabelSymbol:
+    """S_LABEL32: a named code address inside a procedure.
+
+    An assembly label, an exception continuation target, an interrupt-return
+    point -- code with a name but not an entry point, which is why these are
+    reported separately from functions rather than merged into them.
+    """
+
+    name: str
+    segment: int   # 1-based section index
+    offset: int    # offset within the section
+    flags: int     # CV_PROCFLAGS, the same byte S_*PROC32 carries
 
 
 @dataclass
@@ -493,6 +512,17 @@ def iter_records(data: bytes, start: int = 0, *,
 def parse_record(kind: int, payload: bytes):
     """Decode one record, or None for a kind we do not decode.
 
+    Every kind with a parser is dispatched here, because this is also what
+    `count_malformed_records` asks "is this record shorter than it claims to
+    be?" with. A kind missing from this list is one whose damaged records are
+    dropped by the extractors and counted by nothing -- a symbol that vanishes
+    with no diagnostic, which is the one failure this parser must not have.
+
+    That covers every record a parser rejects by *raising*. Two kinds can also
+    be dropped without an exception -- a constant whose numeric leaf we do not
+    decode, and an inline site whose annotations place no code -- which is what
+    `count_undecoded_constants` and `Diagnostics.unplaced_inline_sites` are for.
+
     Raises EOFError when the payload is shorter than the kind requires; see
     `decode_record` for the tolerant form the extractors use.
     """
@@ -502,6 +532,20 @@ def parse_record(kind: int, payload: bytes):
         return parse_proc(kind, payload)
     if kind in _DATA_KINDS:
         return parse_data(kind, payload)
+    if kind in PROC_REF_KINDS:
+        return parse_proc_ref(kind, payload)
+    if kind == S_LABEL32:
+        return parse_label(payload)
+    if kind == S_THUNK32:
+        return parse_thunk(payload)
+    if kind == S_TRAMPOLINE:
+        return parse_trampoline(payload)
+    if kind == S_CONSTANT:
+        return parse_constant(payload)
+    if kind == S_UDT:
+        return parse_udt(payload)
+    if kind == S_INLINESITE:
+        return parse_inline_site(payload)
     return None
 
 
@@ -521,10 +565,16 @@ def decode_record(kind: int, payload: bytes):
         return None
 
 
-def count_malformed_records(data: bytes) -> int:
-    """Records whose payload is too short for the kind they claim to be."""
+def count_malformed_records(data: bytes, kind: int | None = None) -> int:
+    """Records whose payload is too short for the kind they claim to be.
+
+    `kind` narrows the count to one kind, which is how a caller separates a
+    record it could not parse from one it parsed and could not use.
+    """
     total = 0
     for rec in iter_records(data):
+        if kind is not None and rec.kind != kind:
+            continue
         try:
             parse_record(rec.kind, rec.payload)
         except EOFError:
@@ -631,6 +681,28 @@ def extract_constants(data: bytes) -> list[Constant]:
     return out
 
 
+def count_undecoded_constants(data: bytes) -> int:
+    """S_CONSTANT records whose value uses a numeric leaf we do not decode.
+
+    These are not malformed -- the record is exactly what it claims to be --
+    so `count_malformed_records` does not see them, and `parse_constant`
+    answers None rather than raising. But the name sits *after* the value, so
+    an unknown value length loses the name too: the record is dropped, and
+    without this nothing would say so. A `constexpr float` is the everyday
+    case; no fixture in the corpus has one.
+    """
+    total = 0
+    for rec in iter_records(data):
+        if rec.kind != S_CONSTANT:
+            continue
+        try:
+            if parse_constant(rec.payload) is None:
+                total += 1
+        except EOFError:
+            continue  # short for its kind, which `count_malformed_records` has
+    return total
+
+
 def extract_udts(data: bytes) -> list[UserDefinedType]:
     out = []
     for rec in iter_records(data):
@@ -656,6 +728,15 @@ def parse_thunk(payload: bytes) -> ThunkSymbol:
     # Variant data keyed by `ordinal` follows the name; we do not decode it.
     return ThunkSymbol(name=name, segment=segment, offset=offset,
                        length=length, ordinal=ordinal)
+
+
+def parse_label(payload: bytes) -> LabelSymbol:
+    r = Reader(payload)
+    offset = r.u32()
+    segment = r.u16()
+    flags = r.u8()
+    return LabelSymbol(name=r.cstring(), segment=segment, offset=offset,
+                       flags=flags)
 
 
 def parse_trampoline(payload: bytes) -> Trampoline:
@@ -693,6 +774,13 @@ def extract_thunks(data: bytes) -> list[ThunkSymbol]:
 def extract_trampolines(data: bytes) -> list[Trampoline]:
     return _decoded(parse_trampoline,
                     (r for r in iter_records(data) if r.kind == S_TRAMPOLINE))
+
+
+def extract_labels(data: bytes) -> list[LabelSymbol]:
+    """S_LABEL32 records. They sit inside a procedure's scope, which the flat
+    record walk steps through like any other nesting."""
+    return _decoded(parse_label,
+                    (r for r in iter_records(data) if r.kind == S_LABEL32))
 
 
 def parse_data(kind: int, payload: bytes) -> DataSymbol:
