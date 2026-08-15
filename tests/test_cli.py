@@ -324,11 +324,14 @@ def test_modules_accounts_for_a_contribution_with_no_module(tmp_path, capsys):
         section_header(".text", 0x1000, 0x10000),
     ]))
 
-    out, _err = _run(capsys, "modules", str(path))
+    out, err = _run(capsys, "modules", str(path))
     assert out == [
         "       1  main.obj",
         "       1  <1 module index(es) not in the module list>",
     ]
+    # The stray line is contributions, not a module: counting it would say
+    # this file has two modules when the module list holds one.
+    assert err[:2] == ["", "1 modules"]
 
 
 def test_info(sample, capsys):
@@ -562,6 +565,135 @@ def test_ctrl_c_is_not_a_traceback(monkeypatch):
 
     monkeypatch.setattr(entry, "main", interrupted)
     assert entry.cli() == 130
+
+
+def _in_a_subprocess(body: str, *, argv: str) -> subprocess.CompletedProcess:
+    """Run `cli()` in a fresh interpreter, so the exit-time flush is real."""
+    repo = str(Path(__file__).resolve().parent.parent)
+    program = (
+        "import os, sys\n"
+        f"sys.path.insert(0, {repo!r})\n"
+        f"{body}"
+        "from purepdb.__main__ import cli\n"
+        f"sys.argv = {argv}\n"
+        "raise SystemExit(cli())\n"
+    )
+    return subprocess.run([sys.executable, "-c", program],
+                          capture_output=True, text=True)
+
+
+def test_a_stdout_closed_by_the_shell_is_reported_not_a_traceback():
+    """`purepdb functions x.pdb >&-` -- closed before the interpreter starts.
+
+    Different from closing the descriptor afterwards: CPython cannot build a
+    stream over it at all and leaves `sys.stdout` as None. `print()` then
+    discards every record in silence, so without this the listing vanished,
+    the count on stderr still claimed it, and the flush raised AttributeError.
+    """
+    if not REAL.exists():
+        pytest.skip("groundtruth fixture missing")
+
+    proc = _in_a_subprocess("sys.stdout = None\n",
+                            argv=f"['purepdb', 'functions', {str(REAL)!r}]")
+
+    assert proc.returncode == 1
+    assert "Traceback" not in proc.stderr
+    assert "standard output is closed" in proc.stderr
+    assert "functions" not in proc.stderr, "no count for a listing nobody got"
+
+
+def test_a_stdout_closed_by_the_shell_does_not_traceback_on_a_missing_file():
+    """The same shape, reaching the error path instead: the handler that
+    settles stdout asked a None for its descriptor."""
+    proc = _in_a_subprocess("sys.stdout = None\n",
+                            argv="['purepdb', 'functions', '/nonexistent.pdb']")
+
+    assert proc.returncode == 1
+    assert "Traceback" not in proc.stderr
+
+
+def test_a_closed_stderr_does_not_push_diagnostics_into_the_records():
+    """`purepdb functions bad.pdb 2>&-` leaves `sys.stderr` as None, and
+    `print(..., file=None)` means *stdout* -- so the error message, the count
+    and every warning would land in among the records."""
+    proc = _in_a_subprocess("sys.stderr = None\n",
+                            argv="['purepdb', 'functions', '/nonexistent.pdb']")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "", "stdout holds records and nothing else"
+
+
+def test_ctrl_c_keeps_the_records_already_written(tmp_path):
+    """Ctrl-C is the one exit that does not mean stdout is broken.
+
+    Abandoning the descriptor here would throw away a listing that was merely
+    interrupted; not settling it at all let the exit flush fail, turning 130
+    into 120.
+    """
+    proc = _in_a_subprocess(
+        "import purepdb.__main__ as entry\n"
+        "def interrupted(_argv):\n"
+        "    print('a record that was already written')\n"
+        "    raise KeyboardInterrupt\n"
+        "entry.main = interrupted\n",
+        argv="['purepdb', 'functions', 'unused.pdb']")
+
+    assert proc.returncode == 130
+    assert proc.stdout == "a record that was already written\n"
+    assert "Exception ignored" not in proc.stderr
+
+
+def test_ctrl_c_on_an_unwritable_stdout_still_exits_130():
+    """The descriptor is gone, so the buffered line cannot be written.
+
+    Ctrl-C is the one exit that leaves stdout unsettled, so the interpreter's
+    exit flush raised where nothing catches it: status 130 became 120, with a
+    message from the interpreter after the command had already finished.
+    """
+    proc = _in_a_subprocess(
+        "os.close(1)\n"
+        "import purepdb.__main__ as entry\n"
+        "def interrupted(_argv):\n"
+        "    print('buffered, and now unwritable')\n"
+        "    raise KeyboardInterrupt\n"
+        "entry.main = interrupted\n",
+        argv="['purepdb', 'functions', 'unused.pdb']")
+
+    assert proc.returncode == 130
+    assert "Exception ignored" not in proc.stderr
+
+
+def test_main_does_not_take_its_callers_stdout_away(capfd, tmp_path):
+    """`main()` is documented as callable from a test, so it must not touch
+    the process's descriptors. It settled stdout on any OSError -- including
+    a plain missing file, which has nothing to do with stdout -- pointing the
+    caller's descriptor at the null device and leaking the one it opened.
+
+    `capfd`, not `capsys`: the damage is a `dup2` onto a real descriptor, and
+    `capsys` replaces stdout with an object that has none, so the call fails
+    harmlessly and the bug stays invisible.
+    """
+    assert main(["purepdb", "functions", str(tmp_path / "nonexistent.pdb")]) == 1
+
+    print("still writing after main() returned")
+
+    assert "still writing after main() returned" in capfd.readouterr().out
+
+
+def test_main_leaves_stdout_alone_when_the_pipe_closes(capfd, monkeypatch):
+    """The same rule for the other branch. `main()` reports 141 and leaves
+    settling the descriptor to `cli()`, which owns the process."""
+    from purepdb import __main__ as entry
+
+    def closed(_path):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(entry.PDB, "open", staticmethod(closed))
+    assert main(["purepdb", "functions", "unused.pdb"]) == 141
+
+    print("still writing after a broken pipe")
+
+    assert "still writing after a broken pipe" in capfd.readouterr().out
 
 
 @pytest.mark.parametrize("raw,printed", [

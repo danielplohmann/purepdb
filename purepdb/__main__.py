@@ -78,6 +78,18 @@ def _rva(value: int | None) -> str:
     return f"{value:#010x}" if value is not None else NO_RVA
 
 
+def _eprint(text: str = "") -> None:
+    """Write a diagnostic to stderr, or to nowhere if there is no stderr.
+
+    `print(..., file=None)` means *stdout*, and the shell can leave
+    `sys.stderr` as None -- `purepdb labels x.pdb 2>&-` does. Printing to it
+    unguarded would put every warning, count and error message in among the
+    records, which is exactly what this command line promises never to do.
+    """
+    if sys.stderr is not None:
+        print(text, file=sys.stderr)
+
+
 def _warn(pdb: PDB) -> None:
     """Everything `diagnose()` found wrong with the file, after the listing.
 
@@ -92,7 +104,7 @@ def _warn(pdb: PDB) -> None:
     for w in pdb.diagnose().warnings:
         # Escaped like a listing: a warning quotes the module name it found
         # the damage in, and that name comes out of the file.
-        print(f"WARNING: {_text(w)}", file=sys.stderr)
+        _eprint(f"WARNING: {_text(w)}")
 
 
 def _info(pdb: PDB) -> None:
@@ -259,7 +271,9 @@ def _modules(pdb: PDB) -> int:
     if stray:
         print(f"{stray:8d}  <{len(counts)} module index(es) not in the "
               f"module list>")
-        printed += 1
+        # Deliberately not counted: the noun is "modules", and this line is
+        # the contributions that name no module. Counting it would report one
+        # module more than the file has.
     return printed
 
 
@@ -304,13 +318,13 @@ def main(argv: list[str]) -> int:
     if len(argv) < 3:
         # Not asked for, so it is a diagnostic. On stderr, where it cannot
         # land in a file somebody meant to fill with records.
-        print(usage(), file=sys.stderr)
+        _eprint(usage())
         return 2
     cmd, path = argv[1], argv[2]
     entry = _COMMANDS.get(cmd)
     if entry is None:
-        print(f"unknown command: {_text(cmd)}", file=sys.stderr)
-        print(usage(), file=sys.stderr)
+        _eprint(f"unknown command: {_text(cmd)}")
+        _eprint(usage())
         return 2
 
     handler, noun, _columns = entry
@@ -318,7 +332,7 @@ def main(argv: list[str]) -> int:
         pdb = PDB.open(path)
         count = handler(pdb)
         if noun is not None:
-            print(f"\n{count} {noun}", file=sys.stderr)
+            _eprint(f"\n{count} {noun}")
             _warn(pdb)
     except PdbError as exc:
         # Every stage is inside this, not just the open. A stream the listing
@@ -330,21 +344,15 @@ def main(argv: list[str]) -> int:
         # The path is escaped too: sweeping a directory of untrusted files
         # means the *file name* is attacker-chosen as surely as the records
         # inside it.
-        print(f"error: {_text(path)}: {_text(str(exc))}", file=sys.stderr)
+        _eprint(f"error: {_text(path)}: {_text(str(exc))}")
         return 1
     except BrokenPipeError:
         # Before OSError, which it is a subclass of. `| head` closes the pipe
         # under us: not an error, and the shell would have reported 141 for
         # the SIGPIPE this stands in for.
-        _stop_writing_to_stdout()
         return 141
     except OSError as exc:
-        # Same reason as above: stdout can be unwritable from the start --
-        # `purepdb labels x.pdb >&-` closes it -- and then the exit-time flush
-        # fails too, turning a reported error into status 120 and a second
-        # message from the interpreter.
-        _stop_writing_to_stdout()
-        print(f"error: {_text(str(exc))}", file=sys.stderr)
+        _eprint(f"error: {_text(str(exc))}")
         return 1
     return 0
 
@@ -364,12 +372,32 @@ def _stop_writing_to_stdout() -> None:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
 
 
+def _settle_stdout() -> None:
+    """Flush what is buffered, and give up on stdout only if that fails.
+
+    Abandoning stdout unconditionally would discard a listing that was merely
+    interrupted: on Ctrl-C the records written so far are still wanted, and
+    the descriptor is usually perfectly healthy.
+    """
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        _stop_writing_to_stdout()
+
+
 def cli() -> int:
     """Console-script entry point (see pyproject `[project.scripts]`).
 
     Everything that is about being a process rather than about PDBs lives
     here, so that `main()` stays callable from a test.
     """
+    if sys.stdout is None:
+        # `purepdb labels x.pdb >&-`. The shell closed the descriptor before
+        # the interpreter could build a stream over it, so there is nowhere to
+        # put the records -- and `print()` discards them in silence, which
+        # would leave the count on stderr describing a listing nobody got.
+        _eprint("error: standard output is closed")
+        return 1
     for stream in (sys.stdout, sys.stderr):
         # A name from a damaged file can hold a character the console cannot
         # encode -- cp1252 has no U+FFFD, which is what an undecodable byte in
@@ -390,14 +418,19 @@ def cli() -> int:
         sys.stdout.flush()
         return status
     except KeyboardInterrupt:
-        print(file=sys.stderr)  # finish the line the listing was on
+        _eprint()  # finish the line the listing was on
+        # Ctrl-C is the one exit here that does not mean stdout is broken, so
+        # the records already written are flushed rather than thrown away.
+        # Without this the interpreter's exit flush raises where nothing
+        # catches it, and 130 becomes 120.
+        _settle_stdout()
         return 130
     except BrokenPipeError:
         _stop_writing_to_stdout()
         return 141
     except OSError as exc:
         _stop_writing_to_stdout()
-        print(f"error: {_text(str(exc))}", file=sys.stderr)
+        _eprint(f"error: {_text(str(exc))}")
         return 1
 
 
