@@ -502,6 +502,58 @@ def test_a_closed_pipe_is_not_an_error(sample, capsys, monkeypatch):
     assert "Traceback" not in capsys.readouterr().err
 
 
+@pytest.mark.skipif(os.name == "nt", reason="141 is the POSIX SIGPIPE status")
+def test_a_reader_that_leaves_before_the_buffer_flushes():
+    """The case an in-process test cannot see.
+
+    A listing small enough to sit in the stdio buffer performs no write while
+    `main()` is running, so the closed pipe is discovered by the interpreter's
+    exit-time flush -- where nothing catches it, and the process ends on
+    status 120 with a message from Python instead of 141.
+    """
+    if not REAL.exists():
+        pytest.skip("groundtruth fixture missing")
+
+    with subprocess.Popen(
+            [sys.executable, "-m", "purepdb", "functions", str(REAL)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=Path(__file__).resolve().parent.parent) as proc:
+        assert proc.stdout is not None and proc.stderr is not None
+        proc.stdout.close()  # the reader leaves before a single byte is read
+        stderr = proc.stderr.read().decode()
+
+    assert proc.returncode == 141
+    assert "Exception ignored" not in stderr
+    assert "Traceback" not in stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="closing fd 1 is a POSIX shape")
+def test_a_closed_stdout_reports_once_and_exits_one():
+    """`purepdb labels x.pdb >&-`: unwritable before the first record.
+
+    A subprocess, because the interpreter's exit-time flush is what makes the
+    difference -- it turned a reported error into status 120 and a second
+    message no test running in-process would see.
+    """
+    repo = str(Path(__file__).resolve().parent.parent)
+    program = (
+        "import os, sys\n"
+        f"sys.path.insert(0, {repo!r})\n"
+        "os.close(1)\n"
+        "from purepdb.__main__ import cli\n"
+        f"sys.argv = ['purepdb', 'labels', {str(REAL)!r}]\n"
+        "raise SystemExit(cli())\n"
+    )
+    if not REAL.exists():
+        pytest.skip("groundtruth fixture missing")
+
+    proc = subprocess.run([sys.executable, "-c", program],
+                          capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert proc.stderr.count("Bad file descriptor") == 1
+    assert "Exception ignored" not in proc.stderr
+
+
 def test_ctrl_c_is_not_a_traceback(monkeypatch):
     from purepdb import __main__ as entry
 
@@ -530,6 +582,35 @@ def test_only_the_unprintable_is_escaped(raw, printed):
     from purepdb.__main__ import _text
 
     assert _text(raw) == printed
+
+
+def test_a_warning_quoting_a_hostile_module_name_is_escaped(tmp_path, capsys):
+    """A warning quotes the module it found damage in, and that name is
+    file-supplied too: raw, it can erase the line and print another."""
+    hostile = "quiet.obj\x1b[2K\rHACKED\nnext.obj"
+    truncated = struct.pack("<HH", 1, codeview.S_LABEL32)  # length below 2
+    module_stream = module_sym_stream(gproc32("main", 1, 0x40) + truncated)
+    mods = module_info(hostile, hostile, sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    path = tmp_path / "hostile-module.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [7]),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+        section_header(".text", 0x1000, 0x10000),
+    ]))
+
+    _out, err = _run(capsys, "labels", str(path))
+    assert any("stopped early" in line for line in err), "expected the warning"
+    for line in err:
+        assert "\x1b" not in line and "\r" not in line
+    escaped = r"quiet.obj\x1b[2K\x0dHACKED\x0anext.obj"
+    assert any(escaped in line for line in err)
 
 
 def test_control_characters_in_a_name_are_escaped(tmp_path, capsys):
