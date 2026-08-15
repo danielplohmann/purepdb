@@ -678,13 +678,20 @@ def test_a_console_that_cannot_encode_a_name_still_lists(tmp_path):
     assert "0x00001050" in proc.stdout
 
 
-def test_a_hostile_file_name_is_escaped_in_the_error(tmp_path, capsys):
+def test_a_hostile_file_name_is_escaped_in_the_error(capsys, monkeypatch):
     """`purepdb functions *` over an untrusted directory: the name of a file
-    that fails to open is as attacker-chosen as the records inside one."""
-    path = tmp_path / "quiet.pdb\x1b[2K\rHACKED"
-    path.write_bytes(b"not a pdb at all" + b"\x00" * 512)
+    that fails to open is as attacker-chosen as the records inside one.
 
-    assert main(["purepdb", "functions", str(path)]) == 1
+    The name is never written to disk here -- Windows rejects a file name
+    holding control characters outright, so only POSIX can carry the real
+    thing, and what is under test is the formatting either way.
+    """
+    def unreadable(_path):
+        raise MsfError("bad magic")
+
+    monkeypatch.setattr(PDB, "open", staticmethod(unreadable))
+    assert main(["purepdb", "functions", "quiet.pdb\x1b[2K\rHACKED"]) == 1
+
     err = capsys.readouterr().err
     assert "\x1b" not in err and "\r" not in err
     assert r"quiet.pdb\x1b[2K\x0dHACKED" in err
