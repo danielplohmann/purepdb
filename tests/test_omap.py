@@ -90,15 +90,21 @@ def test_an_unsorted_table_is_still_answered_correctly():
 # --- end to end -------------------------------------------------------------
 
 def _pdb(*, procs=(), publics=(), original_sections=(), final_sections=(),
-         omap=None):
-    """A PDB whose symbols are addressed against `original_sections`."""
+         omap=None, section_headers=True):
+    """A PDB whose symbols are addressed against `original_sections`.
+
+    `section_headers=False` leaves slot 5 unnamed, which is the shape a
+    BBT-processed PDB has when the only section table it carries is the
+    pre-BBT one.
+    """
     module_records = b"".join(procs)
     symrecords = b"".join(publics)
     module_syms = module_sym_stream(module_records)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
                        sym_byte_size=len(module_syms))
     dbg = [0xFFFF] * 11
-    dbg[5] = 6
+    if section_headers:
+        dbg[5] = 6
     if omap is not None:
         dbg[4] = 8
         dbg[10] = 9
@@ -223,6 +229,51 @@ def test_diagnose_reports_the_address_map():
     assert d.omap_entries == 2
     assert d.has_original_sections
     assert d.warnings == []
+
+
+def test_a_bbt_pdb_without_slot_5_reports_the_two_address_spaces():
+    """Slot 10 and the map present, slot 5 absent: the divergence in #39.
+
+    Symbols resolve against the pre-BBT table and are then translated, so every
+    rva is final. `sections` is slot 5 alone and comes back empty, which leaves
+    `original_sections` as the only table a caller can display -- and that one
+    is the space the map translates *out of*. Both numbers look like RVAs and
+    nothing marked the mismatch.
+    """
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)],
+               original_sections=ORIGINAL, final_sections=FINAL, omap=MOVED,
+               section_headers=False)
+
+    # The two answers really are in different spaces: the function ships at
+    # 0x8100, and the only visible section table still says .text is at 0x1000.
+    assert pdb.functions()[0].rva == 0x8100
+    assert pdb.sections == []
+    assert pdb.original_sections[0].virtual_address == 0x1000
+
+    d = pdb.diagnose()
+    assert d.omap_entries == 2
+    assert d.has_original_sections
+    assert not d.has_section_headers
+    assert any("not comparable" in w for w in d.warnings), d.warnings
+
+
+def test_a_bbt_pdb_with_both_tables_is_not_warned_about():
+    """The ordinary BBT shape, which is fine: symbols resolve through slot 10
+    plus the map and `sections` returns slot 5, both final addresses."""
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)],
+               original_sections=ORIGINAL, final_sections=FINAL, omap=MOVED)
+
+    assert pdb.sections[0].virtual_address == 0x8000
+    assert not any("not comparable" in w for w in pdb.diagnose().warnings)
+
+
+def test_no_address_space_warning_without_an_address_map():
+    """Slot 5 missing on an image that was never BBT-processed is a different
+    problem, and already has its own warning; this one must not also fire."""
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)],
+               original_sections=ORIGINAL, section_headers=False)
+
+    assert not any("not comparable" in w for w in pdb.diagnose().warnings)
 
 
 def test_original_sections_without_an_address_map_are_warned_about():

@@ -82,6 +82,17 @@ The shapes that once needed a fixture, and the one still open:
   shape no test here has seen. See issue #25: fetching one at test time belongs
   in `dev/`, beside the llvm-pdbutil cross-check, rather than in this directory.
 
+  Two things worth recording for whoever tries to close that gap. A vendor
+  symbol-server PDB is not eligible here whatever it would prove: it is neither
+  our own build nor public-domain material. And the one open-source tool that
+  writes OMAP — Google's Syzygy `relink`, archived but Apache 2.0, with
+  relinked output committed in its own tree — writes slots 3 and 4 only, never
+  slot 10. Measured on `refinery/test_data/test_vtables_omap.dll.pdb`: 1228
+  OMAP entries, no original section table, and purepdb reads it with no
+  malformed records. So that file would be a real test of OMAP *parsing*, and
+  still not of the slot-10 branch, which is the one that changes an address.
+  Nothing public appears to write slot 10.
+
 Keep fixtures small, keep them own builds or public-domain sources, and record
 the toolchain here — a fixture whose provenance is unclear cannot stay in a
 public repository.
