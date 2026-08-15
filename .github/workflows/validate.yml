@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+# No cancellation: unlike the PR workflows, every run here is either the
+# nightly one or one somebody asked for by hand, and neither is superseded by
+# a later push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -29,24 +32,30 @@ jobs:
           python-version: "3.11"
       # The runner image ships LLVM, but not always with its bin directory on
       # PATH, and `llvm-pdbutil` is one of the tools that is only there.
-      # Installing is the fallback, not the first move.
+      # Installing is the fallback: Ubuntu's `llvm` package provides
+      # /usr/bin/llvm-pdbutil, and each `llvm-N` provides
+      # /usr/lib/llvm-N/bin/llvm-pdbutil. `sort -V` so llvm-9 does not beat
+      # llvm-18. The `--version` probe is what fails the job when none of that
+      # found anything, since an empty $TOOL is a command that does not exist.
       - name: Locate llvm-pdbutil
         run: |
           TOOL="$(command -v llvm-pdbutil || true)"
           if [ -z "$TOOL" ]; then
-            TOOL="$(ls -1 /usr/lib/llvm-*/bin/llvm-pdbutil 2>/dev/null | tail -1)"
+            TOOL="$(ls -1 /usr/lib/llvm-*/bin/llvm-pdbutil 2>/dev/null | sort -V | tail -1)"
           fi
           if [ -z "$TOOL" ]; then
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends llvm
             TOOL="$(command -v llvm-pdbutil || true)"
             if [ -z "$TOOL" ]; then
-              TOOL="$(ls -1 /usr/lib/llvm-*/bin/llvm-pdbutil 2>/dev/null | tail -1)"
+              TOOL="$(ls -1 /usr/lib/llvm-*/bin/llvm-pdbutil 2>/dev/null | sort -V | tail -1)"
             fi
           fi
           echo "LLVM_PDBUTIL=$TOOL" >> "$GITHUB_ENV"
           "$TOOL" --version
-      # --require-tool so a runner image that stops shipping llvm-pdbutil fails
-      # here rather than passing on a skip that verified nothing.
+      # --require-tool is belt and braces beside that probe. The script itself
+      # fails on an empty corpus and on a fixture it cannot read, so there is
+      # no shape of this job that reports success having compared nothing.
+      # --max-diffs is raised because the log is the only record of a failure.
       - name: Cross-check every fixture
-        run: python dev/validate_against_llvm.py --require-tool
+        run: python dev/validate_against_llvm.py --require-tool --max-diffs 100
