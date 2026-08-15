@@ -115,13 +115,36 @@ On the Rust fixture that is 3797 sites against 248 procedure records — fifteen
 inlined bodies for every function with an entry point, and the largest naming
 gap the parser had.
 
+## Labels
+
+`S_LABEL32` names a code address *inside* a function — an assembly label, an
+exception continuation target, the address an interrupt returns to. It is not
+an entry point, so like a trampoline it stays out of `functions()`: listing one
+would count a body twice.
+
+```python
+for label in pdb.labels():
+    print(hex(label.rva or 0), label.name)
+```
+
+sqlite3 x86 has 1412 of them and x64 1237, every one inside a function body
+purepdb already found, and not one of those 586 distinct names appears in any
+other listing.
+
+Not every producer fills the record in: all 160 in the Rust fixture are twelve
+bytes of fixed fields with an empty name and segment 0. The offset is real, but
+segment 0 names no section, so nothing resolves. They are still reported,
+because the count is what the file says; a caller wanting the useful ones
+filters on `label.rva is not None`.
+
 ## Scope
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
 `S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
-`S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary annotations;
+`S_THUNK32`, `S_TRAMPOLINE`, `S_LABEL32`, `S_INLINESITE` with its binary
+annotations;
 section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
 fallback when that table is absent; OMAP address translation for images whose
 code was moved after linking; the named stream map, the `/names` string table

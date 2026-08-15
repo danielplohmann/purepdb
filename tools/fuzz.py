@@ -76,6 +76,7 @@ def exercise(data: bytes) -> list:
         pdb.udts(),
         pdb.thunks(),
         pdb.trampolines(),
+        pdb.labels(),
         pdb.inline_sites(),
         pdb.section_contributions(),
         pdb.named_streams(),
