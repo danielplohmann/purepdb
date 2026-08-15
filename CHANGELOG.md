@@ -27,6 +27,13 @@ resolve *differently* would be breaking, and would say so here.
   purepdb does not decode, which loses the name with the value; and
   `Diagnostics.unplaced_inline_sites` covers a site whose annotations describe
   no code. Each has a warning, so no record can now go missing in silence.
+- `dev/validate_against_llvm.py`, which cross-checks purepdb against
+  `llvm-pdbutil` record by record — procedures, publics, labels, constants,
+  UDTs, the section-contribution table and the module attribution built on it,
+  every `file:line` entry, and every inline site with all of its code ranges.
+  It skips cleanly when the toolchain is absent and exits non-zero on any
+  disagreement. A nightly CI job runs it; it is deliberately not run on pull
+  requests, where a reference-tool version bump would fail unrelated changes.
 
 ## [0.3.0] - 2026-08-14
 
