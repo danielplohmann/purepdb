@@ -38,16 +38,28 @@ NO_RVA = "    ??????"
 # stream. Printing that as a blank would silently shorten the line.
 NO_NAME = "?"
 
-# C0 and C1 control characters, and DEL. Escaped rather than stripped so the
-# line still says what the record holds, and by codepoint rather than through
-# `unicode_escape`, which would also mangle the legitimate non-ASCII in a
-# path or a Rust symbol.
-_CONTROL = {c: f"\\x{c:02x}" for c in [*range(0x20), 0x7F, *range(0x80, 0xA0)]}
+def _escape(char: str) -> str:
+    code = ord(char)
+    if code < 0x100:
+        return f"\\x{code:02x}"
+    return f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}"
 
 
 def _text(value: str) -> str:
-    """A name or path, safe to print on one line of a terminal."""
-    return value.translate(_CONTROL)
+    """A name or path, safe to print as one line of a terminal.
+
+    Everything Python calls unprintable is escaped, which is a wider net than
+    the C0 controls: it also catches U+2028 and U+2029, which `splitlines()`
+    breaks a line on, and the bidirectional overrides, which can make a name
+    display as a different name entirely. Escaped rather than stripped, so the
+    line still says what the record holds, and by codepoint rather than
+    through `unicode_escape`, which would also mangle the legitimate non-ASCII
+    in a path or a Rust symbol.
+    """
+    if value.isprintable():
+        return value  # every name in the corpus, so this is the path that runs
+    return "".join(ch if ch.isprintable() or ch == " " else _escape(ch)
+                   for ch in value)
 
 
 def _guid_str(g: bytes) -> str:
