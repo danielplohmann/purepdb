@@ -508,6 +508,12 @@ def iter_records(data: bytes, start: int = 0, *,
 def parse_record(kind: int, payload: bytes):
     """Decode one record, or None for a kind we do not decode.
 
+    Every kind with a parser is dispatched here, because this is also what
+    `count_malformed_records` asks "is this record shorter than it claims to
+    be?" with. A kind missing from this list is one whose damaged records are
+    dropped by the extractors and counted by nothing -- a symbol that vanishes
+    with no diagnostic, which is the one failure this parser must not have.
+
     Raises EOFError when the payload is shorter than the kind requires; see
     `decode_record` for the tolerant form the extractors use.
     """
@@ -517,6 +523,20 @@ def parse_record(kind: int, payload: bytes):
         return parse_proc(kind, payload)
     if kind in _DATA_KINDS:
         return parse_data(kind, payload)
+    if kind in PROC_REF_KINDS:
+        return parse_proc_ref(kind, payload)
+    if kind == S_LABEL32:
+        return parse_label(payload)
+    if kind == S_THUNK32:
+        return parse_thunk(payload)
+    if kind == S_TRAMPOLINE:
+        return parse_trampoline(payload)
+    if kind == S_CONSTANT:
+        return parse_constant(payload)
+    if kind == S_UDT:
+        return parse_udt(payload)
+    if kind == S_INLINESITE:
+        return parse_inline_site(payload)
     return None
 
 

@@ -128,12 +128,14 @@ for label in pdb.labels():
 ```
 
 sqlite3 x86 has 1412 of them and x64 1237, every one inside a function body
-purepdb already found, and not one of those names appears in any other listing.
+purepdb already found, and not one of those 586 distinct names appears in any
+other listing.
 
 Not every producer fills the record in: all 160 in the Rust fixture are twelve
-bytes of fixed fields with an empty name and segment 0, so they carry neither a
-name nor an address. They are still reported, because the count is what the
-file says; a caller wanting the useful ones filters on `label.rva is not None`.
+bytes of fixed fields with an empty name and segment 0. The offset is real, but
+segment 0 names no section, so nothing resolves. They are still reported,
+because the count is what the file says; a caller wanting the useful ones
+filters on `label.rva is not None`.
 
 ## Scope
 
