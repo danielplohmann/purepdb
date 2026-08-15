@@ -129,6 +129,11 @@ def thunk32(name: str, segment: int, offset: int, length: int = 6,
     return make_record(0x1102, payload)
 
 
+def label32(name: str, segment: int, offset: int, flags: int = 0) -> bytes:
+    payload = struct.pack("<IHB", offset, segment, flags) + name.encode() + b"\x00"
+    return make_record(0x1105, payload)
+
+
 def trampoline(*, thunk_segment: int, thunk_offset: int,
                target_segment: int, target_offset: int,
                size: int = 5, kind: int = 0) -> bytes:

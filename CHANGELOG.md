@@ -26,6 +26,11 @@ resolve *differently* would be breaking, and would say so here.
   field states what a caller otherwise has to infer from the shape of the
   mangled names — a Rust module says `Rust`, and the linker's own contribution
   says `Link`. `purepdb.CompileInfo`.
+- `S_LABEL32` decoding: named code addresses inside procedures — assembly
+  labels, exception continuation targets, interrupt-return points. `PDB.labels()`,
+  `Label`, `codeview.LabelSymbol`, and `Diagnostics.labels`. They are
+  deliberately *not* merged into `functions()`, because a label is an address
+  within a body that already has an entry point.
 
 ### Fixed
 
