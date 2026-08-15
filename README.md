@@ -56,6 +56,7 @@ CLI — every listing the library produces has a subcommand:
 ```
 purepdb functions    app.pdb    # rva  source  size  name
 purepdb publics      app.pdb    # seg  off  kind  name
+purepdb data         app.pdb    # rva  scope  name
 purepdb labels       app.pdb    # rva  name
 purepdb thunks       app.pdb    # rva  size  ordinal  name
 purepdb trampolines  app.pdb    # rva  size  -> target rva
@@ -64,6 +65,7 @@ purepdb lines        app.pdb    # rva  file:line
 purepdb constants    app.pdb    # value  name
 purepdb udts         app.pdb    # type-index  name
 purepdb modules      app.pdb    # contributions  module
+purepdb sections     app.pdb    # rva  size  executable  name
 purepdb info         app.pdb    # version/age/GUID
 purepdb diagnose     app.pdb    # what the PDB contains, and why a listing is thin
 ```
