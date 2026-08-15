@@ -2,14 +2,21 @@
 
 Every listing is one record per line with stable leading columns, so `grep`,
 `sort` and `awk` work on the output directly. Record counts and warnings go to
-stderr, so a redirected stdout holds records and nothing else.
+stderr, as does the usage text, so a redirected stdout holds records and
+nothing else. `diagnose` is a report rather than a listing: its output *is*
+stdout, warnings included.
 
-Names are printed as the PDB stores them -- decorated, mangled, or empty --
-except that control characters are escaped, since a name is untrusted input
-from the file: one containing a newline would break the one-record-per-line
-contract, and one containing an escape sequence would drive the terminal. An
-address the PDB cannot resolve prints as `??????` rather than as a number that
-would be wrong.
+A name can hold anything, including spaces -- `std::rt::lang_start::closure$0
+<tuple$<> >` is one name -- so **the name is the last field on its line**, and
+nothing is printed after it. The one line that carries two names, an inline
+site and the function it was inlined into, separates them with a tab, which a
+name cannot contain because control characters are escaped: a name holding a
+newline would otherwise put a record on two lines, and one holding an escape
+sequence would drive the terminal. Names are otherwise printed exactly as the
+PDB stores them -- decorated, mangled, or empty.
+
+An address the PDB cannot resolve prints as `??????` rather than as a number
+that would be wrong.
 """
 
 from __future__ import annotations
@@ -58,10 +65,15 @@ def _rva(value: int | None) -> str:
 
 
 def _warn(pdb: PDB) -> None:
-    """Print why a listing came back short, if it did.
+    """Everything `diagnose()` found wrong with the file, after the listing.
 
     An empty or RVA-less result is the parser's normal failure mode rather than
     an exception, so the CLI must never let one pass unremarked.
+
+    Deliberately not filtered to the command: a warning about a stream this
+    listing never read is still the reason the next listing comes back short,
+    and deciding which warning belongs to which subcommand would be a table
+    that drifts out of step with `Diagnostics.warnings`.
     """
     for w in pdb.diagnose().warnings:
         print(f"WARNING: {w}", file=sys.stderr)
@@ -79,7 +91,8 @@ def _diagnose(pdb: PDB) -> None:
     from . import codeview
 
     d = pdb.diagnose()
-    print(f"modules            : {d.modules} ({d.modules_with_symbols} with symbols)")
+    print(f"modules            : {d.modules} "
+          f"({d.modules_with_symbols} with symbols)")
     print(f"proc records       : {d.proc_records} "
           f"({d.proc_refs} in the globals index)")
     print(f"public records     : {d.public_records}")
@@ -91,7 +104,8 @@ def _diagnose(pdb: PDB) -> None:
     print(f"truncated streams  : {d.truncated_streams}")
     print(f"malformed records  : {d.malformed_records}")
     if d.derived_sections:
-        print(f"derived segments   : {d.derived_sections} (from the DBI Section Map)")
+        print(f"derived segments   : {d.derived_sections} "
+              f"(from the DBI Section Map)")
     if d.omap_entries or d.has_original_sections:
         print(f"omap entries       : {d.omap_entries} "
               f"(rvas translated to the post-link layout)")
@@ -107,9 +121,9 @@ def _functions(pdb: PDB) -> int:
     fns = pdb.functions()
     for f in fns:
         size = f"{f.code_size:#x}" if f.code_size is not None else "-"
-        extra = f"  (+{len(f.aliases)} alias)" if f.aliases else ""
-        print(f"{_rva(f.rva)}  {f.source:7s}  size={size:6s}  "
-              f"{_text(f.name)}{extra}")
+        aliases = f"+{len(f.aliases)}" if f.aliases else "-"
+        print(f"{_rva(f.rva)}  {f.source:7s}  size={size:8s}  {aliases:3s}  "
+              f"{_text(f.name)}")
     return len(fns)
 
 
@@ -117,11 +131,19 @@ def _publics(pdb: PDB) -> int:
     pubs = pdb.public_symbols()
     for p in pubs:
         kind = "func" if p.is_function else "data"
-        print(f"seg={p.segment} off={p.offset:#x}  [{kind}]  {_text(p.name)}")
+        print(f"seg={p.segment:<3d} off={p.offset:#010x}  [{kind}]  "
+              f"{_text(p.name)}")
     return len(pubs)
 
 
 def _data(pdb: PDB) -> int:
+    """Data records, not distinct data symbols.
+
+    `data_symbols()` reads the module streams and the symbol-record stream,
+    and a file-static symbol appears in both -- 633 records for 481 distinct
+    addresses on sqlite3 x86. The count says "records" rather than quietly
+    over-reporting how many symbols the file describes.
+    """
     symbols = pdb.data_symbols()
     for d in symbols:
         scope = "global" if d.is_global else "static"
@@ -131,13 +153,19 @@ def _data(pdb: PDB) -> int:
 
 
 def _sections(pdb: PDB) -> int:
-    """The table addresses resolve against, whichever one that is.
+    """The section table, whichever of the three the PDB has.
 
-    `sections` when the PDB carries the image's own headers, and the table
-    rebuilt from the Section Map when it does not -- in which case the warning
-    that follows says the addresses are a reconstruction.
+    The image's own headers when it carries them; then the pre-BBT table from
+    Optional Debug Header slot 10, which is the only one a BBT-processed PDB
+    may have; then the table rebuilt from the Section Map, in which case the
+    warning that follows says the addresses are a reconstruction.
+
+    Falsiness rather than `is not None` at each step: an empty-but-present
+    stream parses into a valid table describing nothing, and printing that as
+    the answer is how this listed nothing at all on a slot-10-only PDB while
+    every address in the file resolved perfectly well.
     """
-    sections = pdb.sections or pdb.derived_sections
+    sections = pdb.sections or pdb.original_sections or pdb.derived_sections
     for s in sections:
         print(f"{s.virtual_address:#010x}  size={s.virtual_size:<10x} "
               f"{'X' if s.executable else '-'}  {_text(s.name)}")
@@ -154,7 +182,7 @@ def _labels(pdb: PDB) -> int:
 def _thunks(pdb: PDB) -> int:
     thunks = pdb.thunks()
     for t in thunks:
-        print(f"{_rva(pdb.to_rva(t.segment, t.offset))}  size={t.length:<6x} "
+        print(f"{_rva(pdb.to_rva(t.segment, t.offset))}  size={t.length:<8x} "
               f"{t.ordinal_name:<10s}  {_text(t.name)}")
     return len(thunks)
 
@@ -163,7 +191,7 @@ def _trampolines(pdb: PDB) -> int:
     tramps = pdb.trampolines()
     for t in tramps:
         target = pdb.to_rva(t.target_segment, t.target_offset)
-        print(f"{_rva(pdb.to_rva(t.segment, t.offset))}  size={t.size:<6x} "
+        print(f"{_rva(pdb.to_rva(t.segment, t.offset))}  size={t.size:<8x} "
               f"-> {_rva(target)}")
     return len(tramps)
 
@@ -171,17 +199,16 @@ def _trampolines(pdb: PDB) -> int:
 def _inline(pdb: PDB) -> int:
     sites = pdb.inline_sites()
     for site in sites:
-        print(f"{_rva(site.rva)}  size={site.code_size:<6x} "
-              f"{_text(site.name) or NO_NAME}  <- {_text(site.parent)}")
+        print(f"{_rva(site.rva)}  size={site.code_size:<8x} "
+              f"{_text(site.name) or NO_NAME}\t<- {_text(site.parent)}")
     return len(sites)
 
 
 def _lines(pdb: PDB) -> int:
     total = 0
     for line in pdb.lines():
-        # 0xFEEFEE and 0xF00F00 are markers rather than line numbers; they are
-        # printed as they are stored, since filtering them here would hide a
-        # record the PDB does contain.
+        # 0xFEEFEE and 0xF00F00 print as themselves: they are markers rather
+        # than line numbers, and hiding one would hide a record the PDB holds.
         print(f"{_rva(line.rva)}  {_text(line.file)}:{line.line}")
         total += 1
     return total
@@ -197,7 +224,7 @@ def _constants(pdb: PDB) -> int:
 def _udts(pdb: PDB) -> int:
     udts = pdb.udts()
     for u in udts:
-        print(f"{u.type_index:#010x}  {_text(u.name)}")
+        print(f"{u.type_index:#x}  {_text(u.name)}")
     return len(udts)
 
 
@@ -205,30 +232,35 @@ def _modules(pdb: PDB) -> int:
     """One line per linker input, with how much of the image it claims."""
     counts = collections.Counter(c.module_index
                                  for c in pdb.section_contributions())
+    printed = 0
     for i, mod in enumerate(pdb.dbi.modules):
         print(f"{counts.pop(i, 0):8d}  {_text(mod.module_name)}")
+        printed += 1
     # A contribution naming a module the module list does not have is what
     # `module_of()` answers None for. Reporting the total keeps the column sums
     # honest rather than losing those entries between the lines above.
     stray = sum(counts.values())
     if stray:
-        print(f"{stray:8d}  <{len(counts)} module index(es) not in the module list>")
-    return len(pdb.dbi.modules)
+        print(f"{stray:8d}  <{len(counts)} module index(es) not in the "
+              f"module list>")
+        printed += 1
+    return printed
 
 
 # name -> (handler, what one line is, the columns it prints). The listings all
 # return how many records they printed; `info` and `diagnose` are reports
 # rather than listings, so they carry no noun and get no count line.
 _COMMANDS: dict[str, tuple[Callable[[PDB], int | None], str | None, str]] = {
-    "info": (_info, None, "PDB metadata (version/age/GUID)"),
-    "diagnose": (_diagnose, None, "what the PDB contains, and why a listing is thin"),
-    "functions": (_functions, "functions", "rva  source  size  name"),
+    "info": (_info, None, "version, signature, age and GUID"),
+    "diagnose": (_diagnose, None,
+                 "what the PDB contains, and why a listing is thin"),
+    "functions": (_functions, "functions", "rva  source  size  aliases  name"),
     "publics": (_publics, "public symbols", "seg  off  kind  name"),
-    "data": (_data, "data symbols", "rva  scope  name"),
+    "data": (_data, "data records", "rva  scope  name"),
     "labels": (_labels, "labels", "rva  name"),
     "thunks": (_thunks, "thunks", "rva  size  ordinal  name"),
     "trampolines": (_trampolines, "trampolines", "rva  size  -> target rva"),
-    "inline": (_inline, "inline sites", "rva  size  name  <- parent"),
+    "inline": (_inline, "inline sites", "rva  size  name <TAB> <- parent"),
     "lines": (_lines, "line entries", "rva  file:line"),
     "constants": (_constants, "constants", "value  name"),
     "udts": (_udts, "type names", "type-index  name"),
@@ -245,9 +277,18 @@ def usage() -> str:
     return "\n".join(out)
 
 
+HELP_FLAGS = ("-h", "--help")
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) < 3:
+    if len(argv) > 1 and argv[1] in HELP_FLAGS:
+        # Asked for, so it is the output: stdout, and not a failure.
         print(usage())
+        return 0
+    if len(argv) < 3:
+        # Not asked for, so it is a diagnostic. On stderr, where it cannot
+        # land in a file somebody meant to fill with records.
+        print(usage(), file=sys.stderr)
         return 2
     cmd, path = argv[1], argv[2]
     entry = _COMMANDS.get(cmd)
