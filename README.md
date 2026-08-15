@@ -51,32 +51,38 @@ first. On sqlite3 x86 that is 438 of 3620 functions, worst case 4 names.
 70157 of them in sqlite3 x86, across 133 files. It is a generator; the file
 names come from the `/names` stream, which `pdb.named_streams()` locates.
 
-CLI — every listing the library produces has a subcommand:
+CLI — every listing in this README has a subcommand:
 
 ```
-purepdb functions    app.pdb    # rva  source  size  name
+purepdb functions    app.pdb    # rva  source  size  aliases  name
 purepdb publics      app.pdb    # seg  off  kind  name
 purepdb data         app.pdb    # rva  scope  name
 purepdb labels       app.pdb    # rva  name
 purepdb thunks       app.pdb    # rva  size  ordinal  name
 purepdb trampolines  app.pdb    # rva  size  -> target rva
-purepdb inline       app.pdb    # rva  size  name  <- parent
+purepdb inline       app.pdb    # rva  size  name <TAB> <- parent
 purepdb lines        app.pdb    # rva  file:line
 purepdb constants    app.pdb    # value  name
 purepdb udts         app.pdb    # type-index  name
 purepdb modules      app.pdb    # contributions  module
 purepdb sections     app.pdb    # rva  size  executable  name
-purepdb info         app.pdb    # version/age/GUID
+purepdb info         app.pdb    # version, signature, age and GUID
 purepdb diagnose     app.pdb    # what the PDB contains, and why a listing is thin
 ```
 
-`purepdb` with no arguments lists them all. Output is one record per line with
-stable leading columns; record counts and warnings go to stderr, so a
+`purepdb --help` lists them all. Output is one record per line with stable
+leading columns; counts, warnings and the usage text go to stderr, so a
 redirected stdout holds records and nothing else:
 
 ```bash
 purepdb functions app.pdb | awk '$1 != "??????" {print $1}' | sort
 ```
+
+A name can contain spaces — `std::rt::lang_start::closure$0<tuple$<> >` is one
+name — so **the name is the last field on its line** and nothing follows it.
+The one line carrying two names, an inline site and the function it was
+inlined into, separates them with a tab, which a name cannot contain because
+control characters in a name are escaped.
 
 ## When a listing comes back short
 

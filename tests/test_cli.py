@@ -7,6 +7,7 @@ holds records and nothing else.
 """
 
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -81,8 +82,9 @@ def sample(tmp_path):
     mods = (module_info("main.obj", "main.obj", sym_stream=5,
                         sym_byte_size=4 + len(records),
                         c13_byte_size=len(c13_region))
-            # A module with no symbol stream at all, which is what makes the
-            # `modules` listing more than a one-line table.
+            # A second module, so the `modules` listing is more than one
+            # line, and one with no symbol stream, so `diagnose` has a module
+            # to leave out of `modules_with_symbols`.
             + module_info("crt.obj", "crt.obj", sym_stream=0xFFFF,
                           sym_byte_size=0))
 
@@ -118,10 +120,22 @@ def _run(capsys, *argv):
 # --- the command table ------------------------------------------------------
 
 def test_no_arguments_lists_every_command(capsys):
+    """On stderr: nobody asked for it, so it must not land in a file meant
+    to hold records."""
     assert main(["purepdb"]) == 2
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert captured.out == ""
     for name in _COMMANDS:
-        assert f"    {name}" in out
+        assert f"    {name}" in captured.err
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help"])
+def test_help_is_asked_for_so_it_is_output(capsys, flag):
+    assert main(["purepdb", flag]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    for name in _COMMANDS:
+        assert f"    {name}" in captured.out
 
 
 def test_an_unknown_command_is_rejected_with_the_list(capsys):
@@ -131,17 +145,50 @@ def test_an_unknown_command_is_rejected_with_the_list(capsys):
     assert "functions" in err
 
 
-def test_every_listing_the_library_can_produce_has_a_subcommand():
+# Public listings on `PDB` that deliberately have no subcommand of their own,
+# and what reaches the same data instead. Asserted against the class below, so
+# adding a listing to `PDB` fails this test until it is either given a command
+# or written down here -- which is the regression the CLI had.
+UNLISTED = {
+    "module_procs": "the proc half of `functions`",
+    "proc_refs": "the same procedures by another route; `diagnose` counts",
+    "resolve_proc_ref": "takes an argument; not a listing",
+    "module_of": "takes an address; `functions` prints its answer per line",
+    "to_rva": "takes an address",
+    "module_symbol_bytes": "raw bytes for one module",
+    "module_c13_bytes": "raw bytes for one module",
+    "publics_stream": "the hash stream, which holds no records",
+    "string_table": "resolves a file-name offset; `lines` prints the result",
+    "id_table": "resolves an inlinee id; `inline` prints the result",
+    "named_streams": "stream name -> index; `diagnose` reports what it found",
+    "derived_sections": "printed by `sections` when it is the table in use",
+    "original_sections": "printed by `sections` when it is the table in use",
+    "omap": "an address map, not a listing; `diagnose` reports its size",
+    "open": "constructor",
+    "from_bytes": "constructor",
+}
+
+
+def test_no_public_listing_on_pdb_is_missing_a_subcommand():
     """The regression this file exists for: the CLI falling behind the library.
 
-    Each name here is a public listing on `PDB`. Adding one without a
-    subcommand is the state issue #28 describes.
+    Hard-coding the command set would pass while `PDB` grew listings nothing
+    could print, which is exactly the state issue #28 describes -- so this
+    walks `PDB` itself.
     """
-    assert set(_COMMANDS) == {
-        "info", "diagnose", "functions", "publics", "data", "labels", "thunks",
-        "trampolines", "inline", "lines", "constants", "udts", "modules",
-        "sections",
+    printed = {
+        "functions", "public_symbols", "data_symbols", "labels", "thunks",
+        "trampolines", "inline_sites", "lines", "constants", "udts",
+        "section_contributions", "sections", "info", "diagnose",
     }
+    public = {name for name, value in vars(PDB).items()
+              if not name.startswith("_")
+              and (callable(value) or isinstance(value, property))}
+
+    assert public - printed - set(UNLISTED) == set(), (
+        "a public listing on PDB that no subcommand prints")
+    assert len(_COMMANDS) == len(printed), (
+        "one subcommand per listing, and nothing else")
 
 
 # --- one test per listing ---------------------------------------------------
@@ -149,27 +196,58 @@ def test_every_listing_the_library_can_produce_has_a_subcommand():
 def test_functions(sample, capsys):
     out, err = _run(capsys, "functions", sample)
     assert out == [
-        "0x00001040  proc     size=0x100   main  (+1 alias)",
-        "0x00001200  thunk    size=0x6     RoInitialize",
+        "0x00001040  proc     size=0x100     +1   main",
+        "0x00001200  thunk    size=0x6       -    RoInitialize",
     ]
     assert "2 functions" in err
 
 
 def test_publics(sample, capsys):
     out, err = _run(capsys, "publics", sample)
-    assert out == ["seg=1 off=0x40  [func]  _main"]
+    assert out == ["seg=1   off=0x00000040  [func]  _main"]
     assert "1 public symbols" in err
 
 
 def test_data(sample, capsys):
     out, err = _run(capsys, "data", sample)
     assert out == ["0x00001800  global   g_page_cache"]
-    assert "1 data symbols" in err
+    assert "1 data records" in err
 
 
 def test_sections(sample, capsys):
     out, err = _run(capsys, "sections", sample)
     assert out == ["0x00001000  size=10000      X  .text"]
+    assert "1 sections" in err
+
+
+def test_sections_prints_the_pre_bbt_table_when_that_is_the_only_one(tmp_path,
+                                                                     capsys):
+    """A BBT-processed PDB can carry slot 10 and no slot 5.
+
+    Every address in such a file resolves -- against slot 10 -- so nothing
+    warns, and a listing that consulted only slot 5 printed an empty table
+    with no explanation at all.
+    """
+    module_stream = module_sym_stream(gproc32("main", 1, 0x40))
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    dbg = [0xFFFF] * 11
+    dbg[10] = 7  # the original section table, and no slot 5
+    path = tmp_path / "bbt.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=dbg),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+        section_header(".text", 0x1000, 0x2000),
+    ]))
+
+    out, err = _run(capsys, "sections", str(path))
+    assert out == ["0x00001000  size=2000       X  .text"]
     assert "1 sections" in err
 
 
@@ -181,19 +259,19 @@ def test_labels(sample, capsys):
 
 def test_thunks(sample, capsys):
     out, err = _run(capsys, "thunks", sample)
-    assert out == ["0x00001200  size=6      notype      RoInitialize"]
+    assert out == ["0x00001200  size=6        notype      RoInitialize"]
     assert "1 thunks" in err
 
 
 def test_trampolines(sample, capsys):
     out, err = _run(capsys, "trampolines", sample)
-    assert out == ["0x00001300  size=5      -> 0x00001040"]
+    assert out == ["0x00001300  size=5        -> 0x00001040"]
     assert "1 trampolines" in err
 
 
 def test_inline(sample, capsys):
     out, err = _run(capsys, "inline", sample)
-    assert out == ["0x00001044  size=3      helper  <- main"]
+    assert out == ["0x00001044  size=3        helper\t<- main"]
     assert "1 inline sites" in err
 
 
@@ -211,7 +289,7 @@ def test_constants(sample, capsys):
 
 def test_udts(sample, capsys):
     out, err = _run(capsys, "udts", sample)
-    assert out == ["0x00001004  Pager"]
+    assert out == ["0x1004  Pager"]
     assert "1 type names" in err
 
 
@@ -269,17 +347,28 @@ def test_diagnose(sample, capsys):
 # --- the properties that make the output greppable --------------------------
 
 def test_records_go_to_stdout_and_counts_to_stderr(sample, capsys):
-    """A redirected stdout must hold records and nothing else."""
+    """A redirected stdout must hold records and nothing else.
+
+    The sample carries at least one record of every kind, so an empty listing
+    is a failure here rather than something to skip over -- which is what let
+    an earlier version of this test pass on a listing that printed nothing.
+    """
     for name, (_handler, noun, _columns) in _COMMANDS.items():
         if noun is None:
             continue
         out, err = _run(capsys, name, sample)
-        assert all(line.strip() for line in out), f"{name} printed a blank line"
-        assert any(noun in line for line in err), f"{name} printed no count"
+        assert out, f"{name} printed no records at all"
+        assert all(line.strip() for line in out), (
+            f"{name} printed a blank line")
+        assert not any(noun in line for line in out), (
+            f"{name} printed its count on stdout")
+        assert [line for line in err if line] == [f"{len(out)} {noun}"], (
+            f"{name}: stderr must be the count and nothing else here")
 
 
 def test_an_unresolvable_address_is_not_printed_as_a_number(tmp_path, capsys):
-    """No section-header stream, so nothing resolves. The column still lines up."""
+    """No section-header stream, so nothing resolves, and the column still
+    lines up."""
     records = gproc32("main", 1, 0x40) + label32("main_retry", 1, 0x50)
     module_stream = module_sym_stream(records)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
@@ -302,6 +391,64 @@ def test_an_unresolvable_address_is_not_printed_as_a_number(tmp_path, capsys):
         "an unresolved listing must say why")
 
 
+# --- against real linker output ---------------------------------------------
+
+REAL = (Path(__file__).resolve().parent / "data" / "rustpe"
+        / "rust_pe_symbols_msvc.pdb")
+
+# Every listing whose first column is an address. The synthetic sample cannot
+# check these: its names hold no spaces, its code sizes are three hex digits,
+# and its paths are short -- so it agrees with any column layout at all.
+ADDRESS_FIRST = ["functions", "data", "labels", "thunks", "trampolines",
+                 "inline", "lines", "sections"]
+
+
+def _real(capsys, command):
+    if not REAL.exists():
+        pytest.skip("groundtruth fixture missing")
+    return _run(capsys, command, str(REAL))[0]
+
+
+@pytest.mark.parametrize("command", ADDRESS_FIRST)
+def test_the_first_column_is_an_address_on_a_real_pdb(command, capsys):
+    for line in _real(capsys, command):
+        first = line.split()[0]
+        assert re.fullmatch(r"0x[0-9a-f]{8}|\?{6}", first), (
+            f"{command}: {first!r} is not an address")
+
+
+def test_a_name_with_spaces_survives_being_printed(capsys):
+    """The check the synthetic fixture cannot make.
+
+    Rust and C++ names hold spaces -- `closure$0<tuple$<> >` -- so a field
+    printed after one is unrecoverable. Splitting off exactly the leading
+    columns has to give back a name the library agrees exists.
+    """
+    lines = _real(capsys, "functions")
+    names = {n for f in PDB.open(str(REAL)).functions() for n in f.names}
+    spaced = 0
+    for line in lines:
+        name = line.split(maxsplit=4)[4]
+        assert name in names, f"{name!r} is not a name purepdb reported"
+        spaced += " " in name
+    assert spaced, "expected the fixture to carry names with spaces"
+
+
+def test_an_inline_site_and_its_parent_are_both_recoverable(capsys):
+    """Two names on one line, so they are separated by a tab."""
+    lines = _real(capsys, "inline")
+    pdb = PDB.open(str(REAL))
+    names = {site.name for site in pdb.inline_sites()}
+    parents = {site.parent for site in pdb.inline_sites()}
+
+    assert lines
+    for line in lines:
+        record, tab, parent = line.partition("\t")
+        assert tab, "the two names must be tab-separated"
+        assert record.split(maxsplit=2)[2] in names
+        assert parent.removeprefix("<- ") in parents
+
+
 # --- the ways a process can go wrong, rather than a PDB ---------------------
 
 def test_a_stream_that_fails_mid_listing_is_reported_not_raised(sample, capsys,
@@ -315,15 +462,16 @@ def test_a_stream_that_fails_mid_listing_is_reported_not_raised(sample, capsys,
     def unreadable(_pdb):
         raise MsfError("stream 7 is a nil stream")
 
-    monkeypatch.setitem(_COMMANDS, "labels", (unreadable, "labels", "rva  name"))
+    monkeypatch.setitem(_COMMANDS, "labels",
+                        (unreadable, "labels", "rva  name"))
     assert main(["purepdb", "labels", sample]) == 1
     captured = capsys.readouterr()
     assert "error:" in captured.err and "nil stream" in captured.err
     assert "Traceback" not in captured.err
 
 
-def test_a_stream_that_fails_in_the_warning_step_is_reported_too(sample, capsys,
-                                                                 monkeypatch):
+def test_a_stream_that_fails_in_the_warning_step_is_reported_too(
+        sample, capsys, monkeypatch):
     """The subtle half: `diagnose()` reads streams the listing never touched,
     so it can fail on a file that listed perfectly well -- with the records
     already printed."""
@@ -348,7 +496,8 @@ def test_a_closed_pipe_is_not_an_error(sample, capsys, monkeypatch):
         print("0x00001000  first")
         raise BrokenPipeError(32, "Broken pipe")
 
-    monkeypatch.setitem(_COMMANDS, "labels", (closes_early, "labels", "rva  name"))
+    monkeypatch.setitem(_COMMANDS, "labels",
+                        (closes_early, "labels", "rva  name"))
     assert main(["purepdb", "labels", sample]) == 141
     assert "Traceback" not in capsys.readouterr().err
 
@@ -388,8 +537,9 @@ def test_control_characters_in_a_name_are_escaped(tmp_path, capsys):
     assert out == [r"0x00001050  evil\x0asecond\x1b[31mline"]
 
 
-def test_a_console_that_cannot_encode_a_name_does_not_kill_the_listing(tmp_path):
-    """An undecodable byte in a name becomes U+FFFD, which cp1252 cannot encode.
+def test_a_console_that_cannot_encode_a_name_still_lists(tmp_path):
+    """An undecodable byte in a name becomes U+FFFD, which cp1252 cannot
+    encode.
 
     Run as a subprocess because it is the console encoding that is under test,
     and pytest's capture replaces it.
