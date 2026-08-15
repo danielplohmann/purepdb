@@ -218,6 +218,37 @@ def test_modules(sample, capsys):
     assert "2 modules" in err
 
 
+def test_modules_accounts_for_a_contribution_with_no_module(tmp_path, capsys):
+    """A contribution naming a module the list does not have is not dropped.
+
+    That is the case `module_of()` answers None for, so leaving it out of the
+    summary would make the counts quietly disagree with the table.
+    """
+    module_stream = module_sym_stream(gproc32("main", 1, 0x40))
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    path = tmp_path / "stray.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [7],
+                   sec_contrib=section_contributions([(1, 0x0, 0x100, 0),
+                                                      (1, 0x100, 0x100, 9)])),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+        section_header(".text", 0x1000, 0x10000),
+    ]))
+
+    out, _err = _run(capsys, "modules", str(path))
+    assert out == [
+        "       1  main.obj",
+        "       1  <1 module index(es) not in the module list>",
+    ]
+
+
 def test_info(sample, capsys):
     out, err = _run(capsys, "info", sample)
     assert out[0] == "version   : 20000404"
