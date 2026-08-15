@@ -447,6 +447,8 @@ def udt(name: str, type_index: int = 0x1004) -> bytes:
     return make_record(0x1108, payload)
 
 
-def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74) -> bytes:
+def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74,
+            kind: int = 0x110D) -> bytes:
+    """S_GDATA32, or S_LDATA32 with `kind=0x110C`: same layout either way."""
     payload = struct.pack("<IIH", type_index, offset, segment) + name.encode() + b"\x00"
-    return make_record(0x110D, payload)
+    return make_record(kind, payload)
