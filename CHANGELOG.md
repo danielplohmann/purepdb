@@ -43,9 +43,10 @@ resolve *differently* would be breaking, and would say so here.
   addresses the TLS initialisation template, not the variable — which has no
   address in the image at all — so the field is `template_rva` rather than
   `rva`, and the two are not comparable. `ThreadLocal`, `ThreadLocalSymbol`.
-- `Diagnostics.thread_local_records`, and a warning when a file has thread-local
-  records — `data_symbols()` deliberately omits them, and a short listing with
-  no explanation is the thing `diagnose()` exists to prevent.
+- `Diagnostics.thread_local_records`, printed by the `diagnose` subcommand, and
+  a warning when a file has thread-local records — `data_symbols()` deliberately
+  omits them, and a short listing with no explanation is the thing `diagnose()`
+  exists to prevent.
 - A `tls` fixture: a freestanding x64 PE and PDB carrying both thread-local
   record kinds, with the four template addresses cross-checked against the
   initial values in the image.

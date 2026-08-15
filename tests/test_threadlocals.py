@@ -87,6 +87,10 @@ def test_a_record_too_short_for_its_kind_is_skipped_and_counted(kind):
 # --- through a whole PDB ----------------------------------------------------
 
 def _pdb(module_records: bytes = b"", symrecords: bytes = b""):
+    return PDB.from_bytes(_pdb_bytes(module_records, symrecords))
+
+
+def _pdb_bytes(module_records: bytes = b"", symrecords: bytes = b"") -> bytes:
     module_syms = module_sym_stream(module_records)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
                        sym_byte_size=len(module_syms))
@@ -101,7 +105,7 @@ def _pdb(module_records: bytes = b"", symrecords: bytes = b""):
         section_header(".text", 0x1000) + section_header(".tls", 0x4000),
         symrecords,
     ]
-    return PDB.from_bytes(build_msf(streams))
+    return build_msf(streams)
 
 
 def test_the_template_address_resolves_through_the_section_table():
@@ -181,6 +185,31 @@ def test_no_thread_local_warning_when_the_file_has_none():
     d = _pdb(gdata32("plain", 1, 0x20)).diagnose()
     assert d.thread_local_records == 0
     assert not any("thread-local" in w for w in d.warnings)
+
+
+def test_cli_diagnose_reports_the_record_count(tmp_path, capsys):
+    """The count is a `Diagnostics` field, so `diagnose` has to print it.
+
+    Without this line the warning was the only way to learn it, which put a
+    number that describes the file in the channel for what went wrong with it.
+    """
+    from purepdb.__main__ import main
+
+    path = tmp_path / "tls.pdb"
+    path.write_bytes(_pdb_bytes(thread32("tls_counter", 2, 0x10)))
+
+    assert main(["purepdb", "diagnose", str(path)]) == 0
+    assert "thread-local recs  : 1" in capsys.readouterr().out
+
+
+def test_cli_diagnose_stays_quiet_about_a_file_with_none(tmp_path, capsys):
+    from purepdb.__main__ import main
+
+    path = tmp_path / "plain.pdb"
+    path.write_bytes(_pdb_bytes(gdata32("plain", 1, 0x20)))
+
+    assert main(["purepdb", "diagnose", str(path)]) == 0
+    assert "thread-local" not in capsys.readouterr().out
 
 
 # --- against real linker output ---------------------------------------------
