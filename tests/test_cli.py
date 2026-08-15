@@ -512,6 +512,26 @@ def test_ctrl_c_is_not_a_traceback(monkeypatch):
     assert entry.cli() == 130
 
 
+@pytest.mark.parametrize("raw,printed", [
+    ("plain", "plain"),
+    # spaces, angle brackets and non-ASCII are all legitimate in a name
+    ("std::rt::lang_start::closure$0<tuple$<> >",
+     "std::rt::lang_start::closure$0<tuple$<> >"),
+    ("caf\u00e9_\u4e2d\u6587", "caf\u00e9_\u4e2d\u6587"),
+    ("a\nb", "a\\x0ab"),
+    ("a\x1b[31mb", "a\\x1b[31mb"),
+    ("a\x7fb", "a\\x7fb"),
+    ("a\x85b", "a\\x85b"),          # NEL, a C1 control
+    ("a\u2028b", "a\\u2028b"),      # LINE SEPARATOR: splitlines() breaks here
+    ("a\u202eb", "a\\u202eb"),      # RTL override: displays as another name
+    ("a\U000e0001b", "a\\U000e0001b"),  # a tag character, astral plane
+])
+def test_only_the_unprintable_is_escaped(raw, printed):
+    from purepdb.__main__ import _text
+
+    assert _text(raw) == printed
+
+
 def test_control_characters_in_a_name_are_escaped(tmp_path, capsys):
     """A name is untrusted input: a newline in one would put a record on two
     lines, and an escape sequence would drive the terminal."""
