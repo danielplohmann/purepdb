@@ -225,10 +225,12 @@ python dev/validate_against_llvm.py path/to/one.pdb   # or a private corpus
 ```
 
 It compares purepdb against `llvm-pdbutil` **record by record**, not by total:
-procedures, publics, constants, UDTs, the section-contribution table and the
-module each function is attributed to through it, every `file:line` entry, and
-every inlined body with all of its code ranges. It exits non-zero on any
-disagreement, printing the records that differ, and skips with a message when
-`llvm-pdbutil` is not installed, so running it is never a requirement. A
-nightly GitHub Actions job runs it with `--require-tool`, which turns a missing
-toolchain into a failure rather than a silent pass.
+procedures, publics, labels, constants, UDTs, the section-contribution table
+and the module each function is attributed to through it, every `file:line`
+entry, and every inlined body with all of its code ranges. It exits non-zero on
+any disagreement, printing the records that differ — and equally on a file it
+could not open or a corpus with no PDBs in it, because a run that verified
+nothing must not report success. It skips with a message when `llvm-pdbutil` is
+not installed, so running it is never a requirement. A nightly GitHub Actions
+job runs it with `--require-tool`, which turns a missing toolchain into a
+failure rather than a silent pass.

@@ -10,24 +10,28 @@ can re-run them, and so a nightly job can fail when one stops holding.
     python dev/validate_against_llvm.py                 # tests/data/**/*.pdb
     python dev/validate_against_llvm.py path/to/one.pdb  # or a private corpus
 
-Exit status is 0 when every check agrees, 1 on any disagreement, and 0 with a
-message when `llvm-pdbutil` is not on PATH -- pass `--require-tool` to make
-that an error instead, which is what CI does.
+The tool is found on PATH, or named by `--llvm-pdbutil` or `$LLVM_PDBUTIL`.
+Exit status is 0 only when every file was read and every check agreed. It is 1
+on a disagreement, on a file purepdb could not open (`--allow-unreadable` to
+sweep a mixed corpus anyway), and on a corpus with no PDBs in it -- each of
+those verified nothing, and a run that verified nothing must not print `ok`.
+A missing `llvm-pdbutil` exits 0 with a message, so running this is never a
+requirement; `--require-tool` makes it an error instead, which is what CI does.
 
-Seven checks, over the subsystems whose accuracy was claimed in a PR
+Nine checks, over the subsystems whose accuracy was claimed in a PR
 description and nowhere else:
 
-    procs           S_*PROC32 name, address and code size
-    publics         S_PUB32 name, address and function flag
-    labels          S_LABEL32 name and address
-    constants       S_CONSTANT name and value
-    udts            S_UDT name and type index
-    contributions   the Section Contribution table, and the module each
-                    function is attributed to through it
-    lines           every file:line and the address it starts at
-    inline sites    each inlined body, its name, and every code range it covers
+    procs               S_*PROC32 name, address and code size
+    publics             S_PUB32 name, address and function flag
+    labels              S_LABEL32 name and address
+    constants           S_CONSTANT name and value
+    udts                S_UDT name and type index
+    contributions       the Section Contribution table
+    inline sites        each inlined body, its name, and every code range
+    module attribution  the module each function is attributed to
+    lines               every file:line and the address it starts at
 
-Three things about llvm-pdbutil's output are worth knowing before trusting a
+Five things about llvm-pdbutil's output are worth knowing before trusting a
 comparison against it, all of them handled here:
 
   * `dump -l` prints line blocks under modules whose debug stream is 0xFFFF,
@@ -35,8 +39,18 @@ comparison against it, all of them handled here:
     all; `dump --modules` is what says so, and their blocks are skipped.
   * it renders the line number 0xF00F00 -- "do not step into this" -- as the
     label `NSI` rather than as a number.
-  * addresses print as `segment:offset` with the offset in *decimal*, while
-    line-table offsets in the same output print in hex.
+  * a symbol address prints as `segment:offset` with **both parts in decimal**,
+    while a line block's header prints **both parts in hex**. Same dump, two
+    bases, and neither is labelled.
+  * the section-contribution row is `SC[...]` for the Ver60 table and
+    `SC2[...]` for the V2 one, which purepdb also reads.
+  * a file heading is `path (MD5: ...)` or `path (no checksum)`; a line block
+    is `line/addr entries` or `line/column/addr entries`.
+
+Anything in that output this script does not recognise raises `ParseError`
+rather than being skipped: a comparison that quietly drops records on the
+reference side reports agreement it never verified, which is worse than no
+comparison at all.
 """
 
 from __future__ import annotations
@@ -64,6 +78,10 @@ DEFAULT_CORPUS = REPO / "tests" / "data"
 NSI_LINE = 0xF00F00
 NO_STREAM = 0xFFFF
 
+# The file for a block llvm could not name, kept distinct from "no heading seen
+# yet": one is a shared blind spot to report, the other is a parse failure.
+_UNRESOLVED_FILE = object()
+
 
 class ParseError(Exception):
     """llvm-pdbutil printed something this script does not understand.
@@ -90,26 +108,63 @@ class Check:
 # --- running the reference implementation -----------------------------------
 
 def dump(tool: str, path: Path, args: Iterable[str], cache: dict) -> str:
-    key = (str(path), tuple(args))
+    """One `llvm-pdbutil dump` run, remembered -- `--symbols` feeds three of
+    the checks.
+
+    The cache is per file, so the arguments alone identify a run.
+    """
+    key = tuple(args)
     if key not in cache:
-        proc = subprocess.run([tool, "dump", *args, str(path)],
-                              capture_output=True, text=True)
-        if proc.returncode != 0 and not proc.stdout:
-            raise ParseError(f"llvm-pdbutil {' '.join(args)} failed: "
-                             f"{proc.stderr.strip()[:200]}")
+        try:
+            proc = subprocess.run([tool, "dump", *key, str(path)],
+                                  capture_output=True, text=True)
+        except OSError as exc:
+            raise ParseError(f"could not run {tool!r}: {exc}") from exc
+        if proc.returncode != 0:
+            # Partial output from a failed run is still compared, because the
+            # records it did print are real -- but the failure is said out
+            # loud, or a truncated dump reads as purepdb inventing records.
+            detail = proc.stderr.strip().splitlines()
+            note = (detail[0][:200] if detail
+                    else f"exit status {proc.returncode}")
+            if not proc.stdout:
+                raise ParseError(
+                    f"llvm-pdbutil {' '.join(key)} failed: {note}")
+            print(f"      note: llvm-pdbutil {' '.join(key)} exited "
+                  f"{proc.returncode}: {note}")
         cache[key] = proc.stdout
     return cache[key]
 
 
 # --- parsing what it printed ------------------------------------------------
 
-_MODULE = re.compile(r"^\s*Mod (\d+) \| `(?P<name>.*)`:")
+# A module heading names its module, or says llvm could not resolve the index.
+_MODULE = re.compile(r"^\s*Mod (?P<index>\d+) \| "
+                     r"(?:`(?P<name>.*)`:|Invalid module index)")
+_MODULE_ANY = re.compile(r"^\s*Mod \d+ \|")
 _RECORD = re.compile(r"^\s*(?P<offset>\d+) \| (?P<kind>S_\w+) \[size = \d+\]"
                      r"(?P<rest>.*)$")
+# Greedy, because a name may contain backticks -- sqlite3 has three, of the
+# form `` `dllmain_crt_process_attach'::`1'::fin$0 ``. No header this script
+# reads carries a second backticked field after the name.
 _NAME = re.compile(r"`(?P<name>.*)`")
-# Segment and offset both print in decimal here -- `addr = 0001:193488` -- which
-# is not the base the line tables use.
+# Both parts decimal -- `addr = 0001:193488`. Across the corpus no segment here
+# ever contains a hex digit while `0010` does appear, which is the proof.
 _ADDR = re.compile(r"addr = (?P<segment>\d+):(?P<offset>\d+)")
+
+
+def module_start(line: str) -> int | None:
+    """The module index a `Mod NNNN |` heading opens, or None for other lines.
+
+    A heading shape this script does not know raises, because the alternative
+    is attributing every record and line block after it to the previous module.
+    """
+    m = _MODULE.match(line)
+    if m:
+        return int(m.group("index"))
+    if _MODULE_ANY.match(line):
+        raise ParseError(f"unrecognised module heading {line.strip()!r}")
+    return None
 
 
 @dataclass
@@ -144,18 +199,19 @@ def iter_records(text: str):
     current: RefRecord | None = None
     module = -1
     for line in text.splitlines():
-        mod = _MODULE.match(line)
-        if mod:
+        index = module_start(line)
+        if index is not None:
             if current is not None:
                 yield current
                 current = None
-            module = int(mod.group(1))
+            module = index
             continue
         rec = _RECORD.match(line)
         if rec:
             if current is not None:
                 yield current
-            current = RefRecord(kind=rec.group("kind"), header=rec.group("rest"),
+            current = RefRecord(kind=rec.group("kind"),
+                                header=rec.group("rest"),
                                 body=[], module=module)
         elif current is not None:
             current.body.append(line)
@@ -164,10 +220,16 @@ def iter_records(text: str):
 
 
 def module_names(text: str) -> dict[int, str]:
-    """Module index -> name, from `dump --modules`."""
-    return {int(m.group(1)): m.group("name")
-            for m in (_MODULE.match(line) for line in text.splitlines())
-            if m}
+    """Module index -> name, from `dump --modules`.
+
+    A module llvm could not resolve has no name to record, and is left out.
+    """
+    out = {}
+    for line in text.splitlines():
+        m = _MODULE.match(line)
+        if m and m.group("name") is not None:
+            out[int(m.group("index"))] = m.group("name")
+    return out
 
 
 def modules_without_a_stream(text: str) -> set[int]:
@@ -179,9 +241,9 @@ def modules_without_a_stream(text: str) -> set[int]:
     """
     out, current = set(), -1
     for line in text.splitlines():
-        mod = _MODULE.match(line)
-        if mod:
-            current = int(mod.group(1))
+        index = module_start(line)
+        if index is not None:
+            current = index
             continue
         m = re.match(r"^\s*debug stream: (\d+),", line)
         if m and int(m.group(1)) == NO_STREAM:
@@ -195,7 +257,8 @@ PROC_KINDS = {"S_GPROC32", "S_LPROC32", "S_GPROC32_ID", "S_LPROC32_ID"}
 
 
 def check_procs(pdb: PDB, text: str) -> Result:
-    ours = [(p.name, p.segment, p.offset, p.code_size) for p in pdb.module_procs()]
+    ours = [(p.name, p.segment, p.offset, p.code_size)
+            for p in pdb.module_procs()]
     theirs = []
     for rec in iter_records(text):
         if rec.kind not in PROC_KINDS:
@@ -203,7 +266,8 @@ def check_procs(pdb: PDB, text: str) -> Result:
         addr = rec.address()
         size = rec.field(r"code size = (\d+)")
         if addr is None or size is None:
-            raise ParseError(f"no address or code size on {rec.kind} `{rec.name}`")
+            raise ParseError(
+                f"no address or code size on {rec.kind} `{rec.name}`")
         theirs.append((rec.name, addr[0], addr[1], int(size)))
     return Result(ours, theirs)
 
@@ -230,7 +294,8 @@ def check_labels(pdb: PDB, text: str) -> Result:
     both sides report it, so it is compared rather than filtered -- dropping it
     on either side would hide a producer purepdb has to keep reading.
     """
-    ours = [(label.name, label.segment, label.offset) for label in pdb.labels()]
+    ours = [(label.name, label.segment, label.offset)
+            for label in pdb.labels()]
     theirs = []
     for rec in iter_records(text):
         if rec.kind != "S_LABEL32":
@@ -245,17 +310,22 @@ def check_labels(pdb: PDB, text: str) -> Result:
 def check_constants(pdb: PDB, text: str) -> Result:
     ours = [(c.name, c.value) for c in pdb.constants()]
     theirs = []
+    unparsed = 0
     for rec in iter_records(text):
         if rec.kind != "S_CONSTANT":
             continue
         value = rec.field(r"value = (-?\d+)")
         if value is None:
-            # A value purepdb does not decode either -- a real leaf kind it
-            # skips, or one llvm prints as something other than an integer.
-            # Counted rather than compared, since neither side has a number.
+            # A numeric leaf llvm prints as something other than an integer,
+            # which is also the shape purepdb skips. Neither side has a number,
+            # so it cannot be compared -- but it is said, because "both blind"
+            # is the one way this check agrees without verifying anything.
+            unparsed += 1
             continue
         theirs.append((rec.name, int(value)))
-    return Result(ours, theirs)
+    notes = ([f"{unparsed} constant(s) print a non-integer value; "
+              f"not compared"] if unparsed else [])
+    return Result(ours, theirs, notes)
 
 
 def check_udts(pdb: PDB, text: str) -> Result:
@@ -271,14 +341,23 @@ def check_udts(pdb: PDB, text: str) -> Result:
     return Result(ours, theirs)
 
 
-_SC = re.compile(r"^\s*SC\[(?P<section>[^\]]*)\]\s*\| mod = (?P<mod>\d+), "
+# `SC[...]` is the Ver60 table and `SC2[...]` the V2 one, which differs only by
+# a trailing `coff section` field. purepdb reads both, so both are compared.
+_SC = re.compile(r"^\s*SC2?\[(?P<section>[^\]]*)\]\s*\| mod = (?P<mod>\d+), "
                  r"(?P<segment>\d+):(?P<offset>\d+), size = (?P<size>\d+)")
+_SC_ANY = re.compile(r"^\s*SC")
 
 
 def _reference_contributions(text: str) -> list[tuple[int, int, int, int]]:
-    return [(int(m.group("segment")), int(m.group("offset")),
-             int(m.group("size")), int(m.group("mod")))
-            for m in (_SC.match(line) for line in text.splitlines()) if m]
+    out = []
+    for line in text.splitlines():
+        m = _SC.match(line)
+        if m:
+            out.append((int(m.group("segment")), int(m.group("offset")),
+                        int(m.group("size")), int(m.group("mod"))))
+        elif _SC_ANY.match(line):
+            raise ParseError(f"unrecognised contribution row {line.strip()!r}")
+    return out
 
 
 def check_contributions(pdb: PDB, text: str) -> Result:
@@ -287,15 +366,24 @@ def check_contributions(pdb: PDB, text: str) -> Result:
     return Result(ours, _reference_contributions(text))
 
 
-def check_module_attribution(pdb: PDB, text: str, modules: dict[int, str]) -> Result:
+def check_module_attribution(pdb: PDB, text: str,
+                             modules: dict[int, str]) -> Result:
     """Every function's `module`, against a lookup built from llvm's table.
 
     The table check above compares the rows; this compares what purepdb *does*
     with them, which is the claim `Function.module` actually makes. The lookup
     here is deliberately a separate implementation from `dbi.ContributionMap`.
+
+    Note what this does *not* check: both sides iterate purepdb's own
+    `functions()`, so the two lengths are equal by construction and only the
+    module label is cross-checked. The function list itself is checked where it
+    comes from -- `procs` covers the S_*PROC32 half; the publics- and
+    thunk-derived entries have no llvm listing to compare against, which the
+    report line says so a green run is not read as more than it is.
     """
     contributions = sorted(_reference_contributions(text))
-    keys = [(segment, offset) for segment, offset, _size, _mod in contributions]
+    keys = [(segment, offset)
+            for segment, offset, _size, _mod in contributions]
 
     def attribute(segment: int, offset: int) -> str | None:
         i = bisect.bisect_right(keys, (segment, offset)) - 1
@@ -311,20 +399,26 @@ def check_module_attribution(pdb: PDB, text: str, modules: dict[int, str]) -> Re
         ours.append((fn.name, fn.segment, fn.offset, fn.module))
         theirs.append((fn.name, fn.segment, fn.offset,
                        attribute(fn.segment, fn.offset)))
-    return Result(ours, theirs)
+    return Result(ours, theirs, [
+        f"the module label on each of purepdb's {len(ours)} functions, not "
+        f"the function list itself, which is equal by construction here",
+    ])
 
 
-# A file heading carries a checksum, or says it has none. Every form is
-# spelled out rather than matched loosely, because a heading this script does
-# not recognise would be read as more of the previous file's lines -- which is
-# not a parse failure, it is 70000 entries attributed to the wrong file.
+# A file heading carries a checksum, or says it has none. Every form is spelled
+# out rather than matched loosely: an unrecognised heading leaves the previous
+# file in place, and the entries under it would be attributed to that file --
+# which is a wrong answer rather than a parse failure. What catches it is the
+# entry-line guard below, which refuses to read a heading as entries.
 _LINE_FILE = re.compile(r"^(?P<file>\S.*?) \((?:no checksum"
                         r"|(?:MD5|SHA-1|SHA-256|None): ?[0-9A-Fa-f]*)\)\s*$")
 _LINE_UNRESOLVED = re.compile(r"^\s*\(unknown file name offset")
-_LINE_BLOCK = re.compile(r"^\s*(?P<segment>\d+):[0-9A-Fa-f]{8}-"
-                         r"[0-9A-Fa-f]{8}, line/addr entries = (?P<count>\d+)")
-# `NSI` where a line number would be, and the offset in hex -- the other base
-# from the one addresses use.
+# Both parts of a block header are hex here -- segment included, unlike the
+# decimal `addr = ` of a symbol record.
+_LINE_BLOCK = re.compile(r"^\s*(?P<segment>[0-9A-Fa-f]+):[0-9A-Fa-f]{8}-"
+                         r"[0-9A-Fa-f]{8}, line(?:/column)?/addr entries = "
+                         r"(?P<count>\d+)")
+# `NSI` where a line number would be, and the offset in hex.
 _LINE_ENTRY = re.compile(r"(?P<line>\d+|NSI)\s+(?P<offset>[0-9A-Fa-f]{8})")
 
 
@@ -335,29 +429,35 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
 
     theirs: list[tuple] = []
     module, file, segment, expected, seen = -1, None, 0, 0, 0
-    unresolved = 0
+    unresolved = skipped_modules = skipped_entries = 0
 
     def check_block_is_complete():
         if expected != seen:
-            raise ParseError(f"module {module}: read {seen} line entries where "
-                             f"the block header said {expected}")
+            raise ParseError(f"module {module}: read {seen} line entries "
+                             f"where the block header said {expected}")
 
     for raw in text.splitlines():
-        mod = _MODULE.match(raw)
-        if mod:
+        index = module_start(raw)
+        if index is not None:
             check_block_is_complete()
-            module, file, expected, seen = int(mod.group(1)), None, 0, 0
+            module, file, expected, seen = index, None, 0, 0
+            if module in streamless:
+                skipped_modules += 1
             continue
         if module == -1 or not raw.strip():
             continue  # the banner above the first module, and blank lines
         if module in streamless:
             # See `modules_without_a_stream`: these blocks are a repeat of the
-            # previous module's and describe nothing.
+            # previous module's and describe nothing. Counted, because this is
+            # the largest filter here -- 97% of the reference output on the
+            # rust fixture -- and a silent one would stop being noticed on the
+            # day it stops being right.
+            skipped_entries += len(_LINE_ENTRY.findall(raw))
             continue
         block = _LINE_BLOCK.match(raw)
         if block:
             check_block_is_complete()
-            segment = int(block.group("segment"))
+            segment = int(block.group("segment"), 16)
             expected, seen = int(block.group("count")), 0
             continue
         named = _LINE_FILE.match(raw)
@@ -367,14 +467,20 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
         if _LINE_UNRESOLVED.match(raw):
             # llvm reports the offset it could not resolve; purepdb drops the
             # entry. Both sides lose it, so it is counted, not compared.
-            file = None
+            file = _UNRESOLVED_FILE
             continue
         entries = list(_LINE_ENTRY.finditer(raw))
         if not entries or _LINE_ENTRY.sub("", raw).strip(" \t!"):
             raise ParseError(f"module {module}: unrecognised line {raw!r}")
+        if file is None:
+            # Entries before any heading: the file cannot be known, and
+            # guessing the previous one is how a whole file lands on the wrong
+            # path. Neither is acceptable, so this stops the run.
+            raise ParseError(f"module {module}: line entries before any file "
+                             f"heading, at {raw.strip()!r}")
         for entry in entries:
             seen += 1
-            if file is None:
+            if file is _UNRESOLVED_FILE:
                 unresolved += 1
                 continue
             number = (NSI_LINE if entry.group("line") == "NSI"
@@ -384,13 +490,17 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
     check_block_is_complete()
 
     notes = []
+    if skipped_modules:
+        notes.append(f"{skipped_modules} module(s) have no debug stream: "
+                     f"{skipped_entries} repeated entries skipped")
     if unresolved:
-        notes.append(f"{unresolved} entry(ies) name a file neither side could "
-                     f"resolve; not compared")
+        notes.append(f"{unresolved} entry(ies) name a file llvm-pdbutil could "
+                     f"not resolve either; not compared")
     return Result(ours, theirs, notes)
 
 
-_INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+) \((?P<name>.*)\), parent")
+_INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+) "
+                      r"\((?P<name>.*)\), parent")
 _CODE_END = re.compile(r"code end (?P<end>0x[0-9A-Fa-f]+) "
                        r"\(\+(?P<length>0x[0-9A-Fa-f]+)\)")
 
@@ -401,13 +511,23 @@ def check_inline_sites(pdb: PDB, text: str) -> Result:
 
     theirs = []
     proc: tuple[str, int] | None = None  # (name, offset) of the enclosing proc
+    module = -1
     for rec in iter_records(text):
+        if rec.module != module:
+            # A procedure's scope cannot span modules, so carrying the last one
+            # across the boundary would attribute the next module's sites to a
+            # procedure in this one.
+            module, proc = rec.module, None
         if rec.kind in PROC_KINDS:
             addr = rec.address()
-            proc = (rec.name, addr[1]) if addr else None
+            if addr is None:
+                raise ParseError(f"no address on {rec.kind} `{rec.name}`")
+            proc = (rec.name, addr[1])
             continue
-        if rec.kind != "S_INLINESITE" or proc is None:
+        if rec.kind != "S_INLINESITE":
             continue
+        if proc is None:
+            raise ParseError("an S_INLINESITE record outside any procedure")
         inlinee = _INLINEE.search(" ".join([rec.header, *rec.body]))
         if inlinee is None:
             raise ParseError("no inlinee on an S_INLINESITE record")
@@ -444,7 +564,10 @@ CHECKS = [
 
 def differences(result: Result, limit: int) -> list[str]:
     """Every record one side has and the other does not, with multiplicity."""
-    ours, theirs = collections.Counter(result.ours), collections.Counter(result.theirs)
+    # Counters, not sets: a repeated record is a real record, and rustpe has
+    # one label tuple that occurs 34 times.
+    ours = collections.Counter(result.ours)
+    theirs = collections.Counter(result.theirs)
     only_ours = sorted((ours - theirs).elements(), key=repr)
     only_theirs = sorted((theirs - ours).elements(), key=repr)
     out = []
@@ -458,15 +581,17 @@ def differences(result: Result, limit: int) -> list[str]:
 
 
 def validate(path: Path, tool: str, limit: int) -> str:
-    """Compare one file, and say whether it agreed, disagreed, or was skipped."""
+    """Compare one file: did it agree, disagree, or fail to open at all?"""
     print(f"{path}")
     try:
         pdb = PDB.open(str(path))
     except PdbError as exc:
-        # A file purepdb rejects outright is not a disagreement -- there is
-        # nothing to compare -- but it must not be counted as agreement either.
-        print(f"  skipped: {exc}")
-        return "skipped"
+        # Nothing was compared, so this is not agreement. On the fixture corpus
+        # it is a regression in `PDB.open` or a damaged checkout, either of
+        # which must fail the run; `--allow-unreadable` is for sweeping a
+        # private corpus that legitimately holds files purepdb rejects.
+        print(f"  unreadable: {exc}")
+        return "unreadable"
 
     cache: dict = {}
     ok = True
@@ -490,7 +615,8 @@ def validate(path: Path, tool: str, limit: int) -> str:
             diffs = differences(result, limit)
             status = "ok  " if not diffs else "FAIL"
             print(f"  {status} {check.name:<20s} "
-                  f"purepdb {len(result.ours)}, llvm-pdbutil {len(result.theirs)}")
+                  f"purepdb {len(result.ours)}, "
+                  f"llvm-pdbutil {len(result.theirs)}")
             for note in result.notes:
                 print(f"      note: {note}")
             for line in diffs:
@@ -511,21 +637,28 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="*", type=Path,
                     help=f"PDBs to check (default: {DEFAULT_CORPUS}/**/*.pdb)")
-    ap.add_argument("--llvm-pdbutil", default=os.environ.get("LLVM_PDBUTIL",
-                                                            "llvm-pdbutil"),
+    # `or` rather than a default, so `LLVM_PDBUTIL=` set to nothing -- what an
+    # unset shell variable expands to in a CI script -- still falls back to
+    # PATH instead of looking for a tool named "".
+    ap.add_argument("--llvm-pdbutil",
+                    default=os.environ.get("LLVM_PDBUTIL") or "llvm-pdbutil",
                     help="path to llvm-pdbutil (or set LLVM_PDBUTIL)")
     ap.add_argument("--require-tool", action="store_true",
-                    help="fail instead of skipping when llvm-pdbutil is absent")
+                    help="fail rather than skip when llvm-pdbutil is absent")
+    ap.add_argument("--allow-unreadable", action="store_true",
+                    help="do not fail on a file purepdb cannot open")
     ap.add_argument("--max-diffs", type=int, default=10,
                     help="records to print per direction per check")
     args = ap.parse_args()
 
-    tool = shutil.which(args.llvm_pdbutil) or (
-        args.llvm_pdbutil if Path(args.llvm_pdbutil).is_file() else None)
+    # `which` already resolves an absolute or ./-relative path and rejects a
+    # directory or a file without the executable bit, so it is the whole test.
+    tool = shutil.which(args.llvm_pdbutil)
     if tool is None:
-        message = (f"llvm-pdbutil not found (looked for {args.llvm_pdbutil!r}). "
-                   f"It ships with LLVM; on Debian/Ubuntu it is in the llvm "
-                   f"package, on macOS in the llvm formula.")
+        message = (f"llvm-pdbutil not found (looked for "
+                   f"{args.llvm_pdbutil!r}). It ships with LLVM; on "
+                   f"Debian/Ubuntu it is in the llvm package, on macOS in "
+                   f"the llvm formula.")
         if args.require_tool:
             print(f"error: {message}", file=sys.stderr)
             return 1
@@ -534,23 +667,29 @@ def main() -> int:
 
     paths = args.paths or sorted(DEFAULT_CORPUS.rglob("*.pdb"))
     if not paths:
-        print(f"no PDBs found under {DEFAULT_CORPUS}")
-        return 0
+        # Verified nothing. Silently succeeding here is how a nightly job stays
+        # green through a checkout that lost its fixtures.
+        print(f"error: no PDBs found under {DEFAULT_CORPUS}", file=sys.stderr)
+        return 1
 
     outcomes = [(path, validate(path, tool, args.max_diffs)) for path in paths]
     failed = [path for path, outcome in outcomes if outcome == "failed"]
-    skipped = sum(1 for _path, outcome in outcomes if outcome == "skipped")
-    aside = f", {skipped} skipped" if skipped else ""
+    unreadable = [path for path, outcome in outcomes
+                  if outcome == "unreadable"]
+    if not args.allow_unreadable:
+        failed += unreadable
+    aside = (f", {len(unreadable)} unreadable and allowed"
+             if unreadable and args.allow_unreadable else "")
 
     print()
     if failed:
         print(f"FAIL: {len(failed)} of {len(paths)} file(s) disagree with "
-              f"llvm-pdbutil{aside}")
-        for path in failed:
+              f"llvm-pdbutil or could not be read{aside}")
+        for path in sorted(set(failed)):
             print(f"  {path}")
         return 1
-    print(f"ok: {len(paths) - skipped} file(s) agree with llvm-pdbutil on "
-          f"every check{aside}")
+    print(f"ok: {len(paths) - len(unreadable)} file(s) agree with "
+          f"llvm-pdbutil on every check{aside}")
     return 0
 
 
