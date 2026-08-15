@@ -18,8 +18,8 @@ resolve *differently* would be breaking, and would say so here.
 
 - `PDB.info()` rejects a PDB Info stream shorter than the 28-byte header it
   reads, with `UnsupportedPdbError`, instead of leaking `struct.error` out of
-  the public API — and out of `purepdb info`. The stream's length comes from
-  the file, so it is a bound the file can lie about.
+  the public API. The stream's length comes from the file, so it is a bound
+  the file can lie about.
 
 ## [0.3.0] - 2026-08-14
 
