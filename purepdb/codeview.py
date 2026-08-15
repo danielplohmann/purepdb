@@ -561,10 +561,16 @@ def decode_record(kind: int, payload: bytes):
         return None
 
 
-def count_malformed_records(data: bytes) -> int:
-    """Records whose payload is too short for the kind they claim to be."""
+def count_malformed_records(data: bytes, kind: int | None = None) -> int:
+    """Records whose payload is too short for the kind they claim to be.
+
+    `kind` narrows the count to one kind, which is how a caller separates a
+    record it could not parse from one it parsed and could not use.
+    """
     total = 0
     for rec in iter_records(data):
+        if kind is not None and rec.kind != kind:
+            continue
         try:
             parse_record(rec.kind, rec.payload)
         except EOFError:

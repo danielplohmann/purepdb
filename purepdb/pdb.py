@@ -846,6 +846,7 @@ class PDB:
         with_symbols = 0
         truncations: list[tuple[str, codeview.Truncation]] = []
         malformed = 0
+        malformed_inline = 0
         line_bytes = 0
         for mod in self.dbi.modules:
             line_bytes += len(self.module_c13_bytes(mod))
@@ -854,6 +855,8 @@ class PDB:
                 continue
             with_symbols += 1
             malformed += codeview.count_malformed_records(body)
+            malformed_inline += codeview.count_malformed_records(
+                body, codeview.S_INLINESITE)
             report: list[codeview.Truncation] = []
             for kind, count in codeview.count_kinds(body, truncation=report).items():
                 kinds[kind] = kinds.get(kind, 0) + count
@@ -894,7 +897,11 @@ class PDB:
             # The gap between the records and the listing, which is the only
             # way a caller learns that a site was found and could not be
             # placed. Decoding them costs 0.03s on the 3797-site fixture.
+            # A record too short to parse is already reported as malformed, so
+            # excluding it keeps one damaged record from being counted twice
+            # under two different explanations.
             unplaced_inline_sites=(kinds.get(codeview.S_INLINESITE, 0)
+                                   - malformed_inline
                                    - len(self.inline_sites())),
             proc_refs=proc_refs,
             line_bytes=line_bytes,
