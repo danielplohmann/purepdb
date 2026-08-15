@@ -293,8 +293,73 @@ def test_labels(sample, capsys):
 
 def test_thunks(sample, capsys):
     out, err = _run(capsys, "thunks", sample)
-    assert out == ["0x00001200  size=6        notype      RoInitialize"]
+    assert out == ["0x00001200  size=6        notype              RoInitialize"]
     assert "1 thunks" in err
+
+
+def test_a_data_record_with_no_name_keeps_its_columns(tmp_path, capsys):
+    """87 of sqlite3 x64's 540 data records carry an empty name, and 151 of
+    x86's 633 do, so this is most of a real listing rather than an edge: the
+    line used to end after the scope column, one field short."""
+    module_stream = module_sym_stream(gdata32("", 1, 0x800))
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    path = tmp_path / "nameless-data.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [7]),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+        section_header(".text", 0x1000, 0x10000),
+    ]))
+
+    out, _err = _run(capsys, "data", str(path))
+
+    assert out == ["0x00001800  global   ?"]
+
+
+# THUNK_ORDINAL, against what `llvm-pdbutil` prints for each: 4 is
+# THUNK_ORDINAL_LOAD and 5 and 6 are the two trampoline ordinals. 4 and 5 were
+# named after delay-loading, which no ordinal means, and 6 was absent, so it
+# printed as a bare `0x06`. No fixture in the corpus carries 4, 5 or 6.
+THUNK_ORDINALS = [
+    (0, "notype"), (1, "adjustor"), (2, "vcall"), (3, "pcode"),
+    (4, "load"), (5, "tramp-incremental"), (6, "tramp-branchisland"),
+]
+
+
+@pytest.mark.parametrize("ordinal,name", THUNK_ORDINALS)
+def test_every_thunk_ordinal_is_named_and_keeps_the_columns(ordinal, name,
+                                                            tmp_path, capsys):
+    module_stream = module_sym_stream(
+        thunk32("RoInitialize", 1, 0x200, ordinal=ordinal))
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    path = tmp_path / f"thunk-{ordinal}.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [7]),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+        section_header(".text", 0x1000, 0x10000),
+    ]))
+
+    out, _err = _run(capsys, "thunks", str(path))
+
+    assert len(out) == 1
+    assert f" {name} " in f" {out[0]} ", "the ordinal must be named, not hex"
+    # The name is last, so an ordinal wider than its field would push it out
+    # of the column every other line puts it in.
+    assert out[0].endswith("  RoInitialize")
+    assert out[0].index("RoInitialize") == len(out[0]) - len("RoInitialize")
 
 
 def test_trampolines(sample, capsys):
@@ -323,7 +388,7 @@ def test_constants(sample, capsys):
 
 def test_udts(sample, capsys):
     out, err = _run(capsys, "udts", sample)
-    assert out == ["0x1004  Pager"]
+    assert out == ["0x1004      Pager"]
     assert "1 type names" in err
 
 
