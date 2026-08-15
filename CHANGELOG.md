@@ -14,7 +14,23 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Thread-local variables: `S_GTHREAD32`/`S_LTHREAD32` are decoded and reported
+  by `PDB.thread_locals()`. `ThreadLocal`, `ThreadLocalSymbol`.
+- `Diagnostics.thread_local_records`, and a warning when a file has thread-local
+  records — `data_symbols()` deliberately omits them, and a short listing with
+  no explanation is the thing `diagnose()` exists to prevent.
+- A `tls` fixture: a freestanding x64 PE and PDB carrying both thread-local
+  record kinds, with the four template addresses cross-checked against the
+  initial values in the image.
+
+### Note
+
+`thread_locals()` is separate from `data_symbols()` rather than part of it. A
+thread-local's `segment:offset` addresses the TLS initialisation template, not
+the variable, which has no address in the image at all — so the field is
+`template_rva` and not `rva`, and the two are not comparable.
 
 ## [0.3.0] - 2026-08-14
 

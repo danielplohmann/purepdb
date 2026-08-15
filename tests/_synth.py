@@ -450,3 +450,14 @@ def udt(name: str, type_index: int = 0x1004) -> bytes:
 def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74) -> bytes:
     payload = struct.pack("<IIH", type_index, offset, segment) + name.encode() + b"\x00"
     return make_record(0x110D, payload)
+
+
+def thread32(name: str, segment: int, offset: int, *, kind: int = 0x1113,
+             type_index: int = 0x74) -> bytes:
+    """S_GTHREAD32 (0x1113) by default, S_LTHREAD32 (0x1112) on request.
+
+    Packed here rather than by reusing `gdata32`'s bytes with the kind swapped,
+    so that the layout this asserts is one the builder states independently.
+    """
+    payload = struct.pack("<IIH", type_index, offset, segment) + name.encode() + b"\x00"
+    return make_record(kind, payload)
