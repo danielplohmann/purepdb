@@ -104,6 +104,28 @@ def _publics(pdb: PDB) -> int:
     return len(pubs)
 
 
+def _data(pdb: PDB) -> int:
+    symbols = pdb.data_symbols()
+    for d in symbols:
+        scope = "global" if d.is_global else "static"
+        print(f"{_rva(pdb.to_rva(d.segment, d.offset))}  {scope:7s}  {d.name}")
+    return len(symbols)
+
+
+def _sections(pdb: PDB) -> int:
+    """The table addresses resolve against, whichever one that is.
+
+    `sections` when the PDB carries the image's own headers, and the table
+    rebuilt from the Section Map when it does not -- in which case the warning
+    that follows says the addresses are a reconstruction.
+    """
+    sections = pdb.sections or pdb.derived_sections
+    for s in sections:
+        print(f"{s.virtual_address:#010x}  size={s.virtual_size:<10x} "
+              f"{'X' if s.executable else '-'}  {s.name}")
+    return len(sections)
+
+
 def _labels(pdb: PDB) -> int:
     labels = pdb.labels()
     for label in labels:
@@ -184,6 +206,7 @@ _COMMANDS: dict[str, tuple[Callable[[PDB], int | None], str | None, str]] = {
     "diagnose": (_diagnose, None, "what the PDB contains, and why a listing is thin"),
     "functions": (_functions, "functions", "rva  source  size  name"),
     "publics": (_publics, "public symbols", "seg  off  kind  name"),
+    "data": (_data, "data symbols", "rva  scope  name"),
     "labels": (_labels, "labels", "rva  name"),
     "thunks": (_thunks, "thunks", "rva  size  ordinal  name"),
     "trampolines": (_trampolines, "trampolines", "rva  size  -> target rva"),
@@ -192,6 +215,7 @@ _COMMANDS: dict[str, tuple[Callable[[PDB], int | None], str | None, str]] = {
     "constants": (_constants, "constants", "value  name"),
     "udts": (_udts, "type names", "type-index  name"),
     "modules": (_modules, "modules", "contributions  module"),
+    "sections": (_sections, "sections", "rva  size  executable  name"),
 }
 
 

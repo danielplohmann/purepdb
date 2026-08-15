@@ -17,6 +17,7 @@ from tests._synth import (
     constant,
     dbi_stream,
     file_checksums,
+    gdata32,
     gproc32,
     inline_site,
     ipi_stream,
@@ -82,7 +83,8 @@ def sample(tmp_path):
                           sym_byte_size=0))
 
     publics = [pub32("_main", 1, 0x40)]
-    symrecords = b"".join(publics) + constant("MAX_PAGE", 42) + udt("Pager")
+    symrecords = (b"".join(publics) + constant("MAX_PAGE", 42) + udt("Pager")
+                  + gdata32("g_page_cache", 1, 0x800))
 
     streams = [
         b"",
@@ -132,8 +134,9 @@ def test_every_listing_the_library_can_produce_has_a_subcommand():
     subcommand is the state issue #28 describes.
     """
     assert set(_COMMANDS) == {
-        "info", "diagnose", "functions", "publics", "labels", "thunks",
+        "info", "diagnose", "functions", "publics", "data", "labels", "thunks",
         "trampolines", "inline", "lines", "constants", "udts", "modules",
+        "sections",
     }
 
 
@@ -152,6 +155,18 @@ def test_publics(sample, capsys):
     out, err = _run(capsys, "publics", sample)
     assert out == ["seg=1 off=0x40  [func]  _main"]
     assert "1 public symbols" in err
+
+
+def test_data(sample, capsys):
+    out, err = _run(capsys, "data", sample)
+    assert out == ["0x00001800  global   g_page_cache"]
+    assert "1 data symbols" in err
+
+
+def test_sections(sample, capsys):
+    out, err = _run(capsys, "sections", sample)
+    assert out == ["0x00001000  size=10000      X  .text"]
+    assert "1 sections" in err
 
 
 def test_labels(sample, capsys):

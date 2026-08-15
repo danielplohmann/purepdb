@@ -31,6 +31,11 @@ resolve *differently* would be breaking, and would say so here.
   the existing `functions`, `publics`, `info` and `diagnose`. Output is one
   record per line with stable leading columns; counts and warnings go to
   stderr. `purepdb` with no arguments lists every command and its columns.
+  `thunks`, `trampolines`, `labels`, `constants`, `udts`, `modules`, `data`
+  and `sections`, beside the existing `functions`, `publics`, `info` and
+  `diagnose`. Output is one record per line with stable leading columns;
+  counts and warnings go to stderr. `purepdb` with no arguments lists every
+  command and its columns.
 - `S_LABEL32` decoding: named code addresses inside procedures — assembly
   labels, exception continuation targets, interrupt-return points. `PDB.labels()`,
   `Label`, `codeview.LabelSymbol`, and `Diagnostics.labels`. They are
