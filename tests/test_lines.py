@@ -242,6 +242,7 @@ def _open(rel):
     pytest.param("sqlite/x64/sqlite3.pdb", 5, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 21, id="rustpe-msvc"),
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 14, id="rustpe-i686"),
+    pytest.param("tls/tls_symbols.pdb", 14, id="tls-x64"),
 ])
 def test_real_pdbs_expose_names_through_the_map(rel, names_index):
     pdb = _open(rel)
@@ -256,6 +257,7 @@ def test_real_pdbs_expose_names_through_the_map(rel, names_index):
     pytest.param("sqlite/x64/sqlite3.pdb", 69834, 124, 3, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 1807, 73, 0, id="rustpe-msvc"),
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 7, 1, 0, id="rustpe-i686"),
+    pytest.param("tls/tls_symbols.pdb", 13, 1, 0, id="tls-x64"),
 ])
 def test_real_line_counts_are_stable(rel, n_lines, n_files, n_markers):
     pdb = _open(rel)

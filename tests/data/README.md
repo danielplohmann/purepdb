@@ -15,6 +15,7 @@ skips when they are absent.
 | `sqlite/x64/sqlite3.{dll,pdb}` | MSVC `link.exe`, VS2019-era, x64 | 3522 procs, 660 publics, 277 exports, C++ decorated aliases |
 | `rustpe/rust_pe_symbols_msvc.{exe,pdb}` | `rust-lld`, rustc 1.97.1, x64 | 248 procs, 451 publics, EH funclets, and 143 code publics with the function flag *clear* |
 | `rustpe32/rust_pe_symbols_i686.{exe,pdb}` | `rust-lld`, rustc 1.94.1, i686 | 2 procs, 5 publics, 13 inline sites, and 4 code publics with the flag clear — the `code_publics` rule at 32 bits |
+| `tls/tls_symbols.{exe,pdb}` | clang + `lld-link` 22.1.8, x64 | 2 `S_GTHREAD32` and 4 `S_LTHREAD32` records — four thread-local variables, two of them counted twice because a static is in both streams; also 2 `S_CONSTANT` and 1 `S_UDT` |
 
 The rustpe fixtures are the ones that pin the `code_publics` rule: `link.exe`
 sets `PUBLIC_FLAG_FUNCTION` on every code public, `rust-lld` does not, and
@@ -59,6 +60,44 @@ links against no CRT and no import library at all, and `stubs.s` is assembled by
 clang — no Microsoft-licensed material is involved. **It is not runnable**: the
 stubs return constants. It exists to be parsed. `hash_round` and `mix_pair` are
 `#[inline(always)]`, which is where its 13 inline sites come from.
+
+**tls_symbols** — our own build, regenerable with the `build.sh` beside it.
+Homebrew clang and `lld-link` 22.1.8, `--target=x86_64-pc-windows-msvc -O1
+-gcodeview`, linked `/nodefaultlib /entry:start /subsystem:console`. No Windows
+host, no Windows SDK and no CRT are involved: `tls_stubs.c` writes out the four
+things the CRT would normally supply for TLS — `_tls_index`, the two `.tls$`
+range markers, and the `IMAGE_TLS_DIRECTORY64` that `lld-link` finds by the name
+`_tls_used`. **It is not runnable**: `start` returns rather than exiting, and
+nothing initialises TLS for a thread. It exists to be parsed.
+
+It is the only fixture here carrying `S_GTHREAD32`/`S_LTHREAD32`, and it covers
+three things at once. Both spellings — `__declspec(thread)` and C11
+`_Thread_local`, which is what C++ `thread_local` lowers to for a
+constant-initialised scalar — produce the same two record kinds. Both linkages
+are present, so `is_global` is exercised in each direction. And the two statics
+appear in their module's stream *and* in the symbol-record stream, so the file
+has six records describing four variables and a listing that does not
+deduplicate answers six.
+
+The four variables initialise to 7, 13, 11 and 17, which is what makes the
+addresses checkable: `test_threadlocals.py` reads those integers out of the PE
+at the four `template_rva` values purepdb reports, through `tests/_pe.py`, which
+never opens the PDB.
+
+The enum and the named struct are there for the golden rows rather than for the
+thread-local records. A fixture wired into a suite with a count of 0 asserts
+nothing — the row passes just as well against an accessor stubbed to return an
+empty list — so the file carries two enumerators and one struct tag to make the
+`constants()` and `udts()` rows real. The `thunks()` row stays 0 and cannot be
+made otherwise: the link is `/nodefaultlib` with no import library, so the image
+has an empty import directory and there is no thunk to describe. That row is
+kept as a guard against records appearing where the image has none, and says so.
+
+The build runs in `/tmp/build/tls` rather than in place, because a PDB records
+the absolute path of everything it was built from — `S_OBJNAME`, `S_ENVBLOCK`
+and the `-cc1` line clang stores in `S_COMPILE3` — and a committed fixture
+should not carry whoever's home directory. `-ffile-prefix-map` does not cover
+`S_OBJNAME`, which is why the directory is moved rather than rewritten.
 
 ## Adding to this set
 

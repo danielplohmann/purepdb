@@ -44,6 +44,8 @@ CASES = [
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb",
                  "rustpe32/rust_pe_symbols_i686.exe",
                  0x014C, 2, 2, 5, 6, 1, id="rustpe-i686"),
+    pytest.param("tls/tls_symbols.pdb", "tls/tls_symbols.exe",
+                 0x8664, 6, 2, 10, 2, 0, id="tls-x64"),
 ]
 
 
@@ -161,6 +163,8 @@ def _follow_jmp(data: bytes, image: PeImage, rva: int) -> int | None:
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb",
                  "rustpe32/rust_pe_symbols_i686.exe",
                  2, 6, id="rustpe-i686"),
+    pytest.param("tls/tls_symbols.pdb", "tls/tls_symbols.exe",
+                 2, 2, id="tls-x64"),
 ])
 def test_unflagged_code_publics_matter_only_for_rust_lld(pdb_rel, image_rel,
                                                         strict, relaxed):

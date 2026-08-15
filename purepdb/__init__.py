@@ -15,6 +15,7 @@ from .codeview import (
     ProcRef,
     ProcSymbol,
     PublicSymbol,
+    ThreadLocalSymbol,
     Truncation,
     UserDefinedType,
 )
@@ -24,7 +25,15 @@ from .ipi import IdTable
 from .msf import MsfError, MsfFile, PdbError, UnsupportedPdbError
 from .names import StringTable
 from .omap import OmapTable
-from .pdb import PDB, Diagnostics, Function, InlineFunction, Line, PdbInfo
+from .pdb import (
+    PDB,
+    Diagnostics,
+    Function,
+    InlineFunction,
+    Line,
+    PdbInfo,
+    ThreadLocal,
+)
 from .sections import (
     Section,
     SectionMapEntry,
@@ -58,6 +67,8 @@ __all__ = [
     "SectionMapEntry",
     "SectionTable",
     "StringTable",
+    "ThreadLocal",
+    "ThreadLocalSymbol",
     "Truncation",
     "UnsupportedPdbError",
     "UserDefinedType",

@@ -201,6 +201,7 @@ def test_a_record_kind_we_do_not_decode_is_never_malformed():
     "sqlite/x64/sqlite3.pdb",
     "rustpe/rust_pe_symbols_msvc.pdb",
     "rustpe32/rust_pe_symbols_i686.pdb",
+    "tls/tls_symbols.pdb",
 ])
 def test_real_pdbs_are_not_truncated(rel):
     """Guard against the check itself producing false positives."""

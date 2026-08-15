@@ -120,6 +120,35 @@ class InlineFunction:
 
 
 @dataclass
+class ThreadLocal:
+    """A thread-local variable, located in the image's TLS template.
+
+    Deliberately not a `DataSymbol` and deliberately not in `data_symbols()`.
+    An ordinary data symbol's address is where the variable is; a thread-local's
+    is where its *initial value* is. Each thread gets its own copy at an address
+    computed from the TEB at runtime, which is in no section and cannot be named
+    here at all -- so the two numbers are not comparable, and the field is called
+    `template_rva` rather than `rva` so that pairing one with a `Function.rva`
+    has to be done on purpose.
+
+    What the template address is good for is reading the initial value out of
+    the image, which is how this was checked: the fixture's four variables
+    initialise to 7, 13, 11 and 17, and those are the bytes at these addresses.
+    """
+
+    name: str
+    segment: int
+    offset: int
+    template_rva: int | None
+    type_index: int
+    kind: int  # S_GTHREAD32 or S_LTHREAD32
+
+    @property
+    def is_global(self) -> bool:
+        return self.kind == codeview.S_GTHREAD32
+
+
+@dataclass
 class PdbInfo:
     version: int
     signature: int
@@ -182,6 +211,14 @@ class Diagnostics:
     """Byte offset where the ModuleInfo walk stopped, or None when it read the
     whole substream. Non-None means `modules` is short and the symbols in the
     modules never reached are missing."""
+    thread_local_records: int = 0
+    """S_GTHREAD32/S_LTHREAD32 records across the module streams and the
+    symbol-record stream.
+
+    Records, not variables: a thread-local with internal linkage is in both, so
+    this is higher than `len(thread_locals())`, which deduplicates. What it is
+    for is explaining a `data_symbols()` listing that does not mention a
+    variable the caller knows is in the binary."""
 
     @property
     def truncated_streams(self) -> int:
@@ -295,6 +332,15 @@ class Diagnostics:
                 f"module streams hold {self.proc_records}; the {short} is short "
                 f"by {abs(self.proc_refs - self.proc_records)}. Both describe "
                 f"the same set, so one of them is being read incompletely"
+            )
+        if self.thread_local_records:
+            out.append(
+                f"{self.thread_local_records} thread-local record(s) "
+                f"(S_GTHREAD32/S_LTHREAD32) are present; they are reported by "
+                f"thread_locals() and deliberately not by data_symbols(), "
+                f"because their segment:offset addresses the TLS "
+                f"initialisation template rather than the variable, which has "
+                f"no address in the image at all"
             )
         if self.line_bytes and not self.has_string_table:
             out.append(
@@ -685,6 +731,45 @@ class PDB:
             out.extend(codeview.extract_data(self.msf.read_stream(self.dbi.symrecord_stream_index)))
         return out
 
+    def thread_locals(self) -> list[ThreadLocal]:
+        """Thread-local variables (S_GTHREAD32/S_LTHREAD32), deduplicated.
+
+        Separate from `data_symbols()` rather than part of it: the address here
+        is the TLS template's, not the variable's. See `ThreadLocal`.
+
+        Both streams have to be read, and they overlap. A thread-local with
+        internal linkage is in its module's stream *and* in the symbol-record
+        stream the globals hash indexes -- the tls fixture has two of those, so
+        concatenating the two sources answers six for a file with four
+        variables. Deduplication is on the full identity, name and segment and
+        offset and kind, because one `static _Thread_local int` per translation
+        unit is ordinary and collapsing those would be a wrong answer rather
+        than an untidy one.
+        """
+        out: list[ThreadLocal] = []
+        seen: set[tuple[str, int, int, int]] = set()
+        for raw in self._each_stream(codeview.extract_thread_locals):
+            key = (raw.name, raw.segment, raw.offset, raw.kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(ThreadLocal(
+                name=raw.name,
+                segment=raw.segment,
+                offset=raw.offset,
+                template_rva=self.to_rva(raw.segment, raw.offset),
+                type_index=raw.type_index,
+                kind=raw.kind,
+            ))
+        return out
+
+    def _each_stream(self, extract):
+        """`extract` applied to every module stream and then to the
+        symbol-record stream, results concatenated in that order."""
+        for mod in self.dbi.modules:
+            yield from extract(self.module_symbol_bytes(mod))
+        yield from extract(self._symbol_records())
+
     def _symbol_records(self) -> bytes:
         idx = self.dbi.symrecord_stream_index
         if not self.msf.is_valid_stream(idx):
@@ -792,6 +877,7 @@ class PDB:
 
         idx = self.dbi.symrecord_stream_index
         proc_refs = 0
+        thread_locals = sum(kinds.get(k, 0) for k in codeview.THREAD_KINDS)
         if self.msf.is_valid_stream(idx):
             symrecords = self.msf.read_stream(idx)
             malformed += codeview.count_malformed_records(symrecords)
@@ -803,6 +889,8 @@ class PDB:
             symrecord_kinds = codeview.count_kinds(symrecords)
             proc_refs = sum(symrecord_kinds.get(k, 0)
                             for k in codeview.PROC_REF_KINDS)
+            thread_locals += sum(symrecord_kinds.get(k, 0)
+                                 for k in codeview.THREAD_KINDS)
 
         return Diagnostics(
             modules=len(self.dbi.modules),
@@ -822,6 +910,7 @@ class PDB:
             line_bytes=line_bytes,
             has_string_table=self.string_table() is not None,
             module_list_stopped_at=self.dbi.module_list_stopped_at,
+            thread_local_records=thread_locals,
         )
 
     def _is_code(self, segment: int) -> bool:
