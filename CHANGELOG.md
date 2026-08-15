@@ -18,9 +18,10 @@ resolve *differently* would be breaking, and would say so here.
 
 - Thread-local variables: `S_GTHREAD32`/`S_LTHREAD32` are decoded and reported
   by `PDB.thread_locals()`. `ThreadLocal`, `ThreadLocalSymbol`.
-- `Diagnostics.thread_local_records`, and a warning when a file has thread-local
-  records — `data_symbols()` deliberately omits them, and a short listing with
-  no explanation is the thing `diagnose()` exists to prevent.
+- `Diagnostics.thread_local_records`, printed by the `diagnose` subcommand, and
+  a warning when a file has thread-local records — `data_symbols()` deliberately
+  omits them, and a short listing with no explanation is the thing `diagnose()`
+  exists to prevent.
 - A `tls` fixture: a freestanding x64 PE and PDB carrying both thread-local
   record kinds, with the four template addresses cross-checked against the
   initial values in the image.

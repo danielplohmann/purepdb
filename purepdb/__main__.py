@@ -95,6 +95,9 @@ def main(argv: list[str]) -> int:
         if d.omap_entries or d.has_original_sections:
             print(f"omap entries       : {d.omap_entries} "
                   f"(rvas translated to the post-link layout)")
+        if d.thread_local_records:
+            print(f"thread-local recs  : {d.thread_local_records} "
+                  f"(reported by thread_locals(), not data_symbols())")
         print(f"section contribs   : {d.section_contributions}")
         print("module record kinds:")
         from . import codeview
