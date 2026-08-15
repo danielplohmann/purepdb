@@ -309,7 +309,7 @@ def main(argv: list[str]) -> int:
     cmd, path = argv[1], argv[2]
     entry = _COMMANDS.get(cmd)
     if entry is None:
-        print(f"unknown command: {cmd}", file=sys.stderr)
+        print(f"unknown command: {_text(cmd)}", file=sys.stderr)
         print(usage(), file=sys.stderr)
         return 2
 
@@ -327,7 +327,10 @@ def main(argv: list[str]) -> int:
         # did, so the warning step can raise on a file the listing survived.
         # These are expected on a directory of real binaries: report the
         # reason, don't hand the user a traceback.
-        print(f"error: {path}: {_text(str(exc))}", file=sys.stderr)
+        # The path is escaped too: sweeping a directory of untrusted files
+        # means the *file name* is attacker-chosen as surely as the records
+        # inside it.
+        print(f"error: {_text(path)}: {_text(str(exc))}", file=sys.stderr)
         return 1
     except BrokenPipeError:
         # Before OSError, which it is a subclass of. `| head` closes the pipe
