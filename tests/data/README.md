@@ -90,10 +90,11 @@ which is what the rule at the end of this file asks for, so a vendor
 symbol-server PDB is not eligible here whatever it would prove.
 
 That leaves producing one. The only open-source tool that writes OMAP is
-Google's Syzygy `relink` — archived July 2023, Apache 2.0, with relinked
-output committed in its own tree under an explicit redistribution grant. That
-output *is* redistributable, so it is a real candidate for the corpus. It does
-not close this gap: Syzygy writes slots 3 and 4 and never slot 10. Measured on
+Google's Syzygy `relink` (<https://github.com/google/syzygy>) — archived July
+2023, Apache 2.0, with relinked output committed in its own tree under an
+explicit redistribution grant. That output *is* redistributable, so it is a
+real candidate for the corpus. It does not close this gap: Syzygy writes slots
+3 and 4 and never slot 10. Measured on
 `syzygy/refinery/test_data/test_vtables_omap.dll.pdb`, purepdb reports 1228
 OMAP entries, no original section table, no malformed records and no
 truncations — a real test of OMAP *parsing*, and no test at all of the slot-10

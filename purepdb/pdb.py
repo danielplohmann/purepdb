@@ -393,7 +393,9 @@ class PDB:
         Read from the section-header stream named by Optional Debug Header slot
         5, and reported only when that stream is present -- these are the
         image's own headers, names and all. When it is absent, addresses still
-        resolve through `derived_sections`.
+        resolve: through `original_sections` if the PDB carries one, and only
+        otherwise through `derived_sections`, which is built only when neither
+        real table is there.
         """
         return self._sections.sections if self._sections else []
 
