@@ -75,6 +75,20 @@ def test_one_name_at_two_addresses_is_two_symbols():
     assert [offset for _n, _s, offset, _k in _keys(pdb)] == [0x100, 0x200]
 
 
+def test_one_name_at_one_offset_in_two_segments_is_two_symbols():
+    """The other half of an address.
+
+    An offset is section-relative, so it identifies nothing on its own: every
+    section starts at 0, and two statics sharing a name at the same offset in
+    different sections are two symbols. No fixture in the corpus carries the
+    shape -- dropping `segment` from the key collapses nothing in any of them.
+    """
+    pdb = _pdb(module_records=gdata32("counter", 1, 0x100, kind=S_LDATA32),
+               second_module=gdata32("counter", 2, 0x100, kind=S_LDATA32))
+
+    assert [segment for _n, segment, *_ in _keys(pdb)] == [1, 2]
+
+
 def test_the_same_name_and_address_with_different_kinds_are_both_kept():
     """The conservative half of the key.
 
