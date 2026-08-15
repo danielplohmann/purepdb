@@ -35,6 +35,95 @@ def test_msf_2_is_named():
         MsfFile(data)
 
 
+def _pdb_with_info_stream(info: bytes) -> PDB:
+    return PDB.from_bytes(_info_pdb_bytes(info))
+
+
+def _info_pdb_bytes(info: bytes) -> bytes:
+    module_syms = module_sym_stream(b"")
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_syms))
+    return build_msf([
+        b"",
+        info,
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [7]),
+        publics_hash_stream([]),
+        module_syms,
+        b"",
+        section_header(".text", 0x1000),
+    ])
+
+
+def _vc70_info(version: int = PDB.PDB_INFO_VC70) -> bytes:
+    """A whole PDB Info header: version, signature, age, then the GUID."""
+    return struct.pack("<III", version, 0xAABBCCDD, 1) + b"\x11" * 16
+
+
+@pytest.mark.parametrize("size", [0, 4, 11, 12, 20, 27])
+def test_a_short_pdb_info_stream_is_rejected_not_unpacked(size):
+    """The stream's length comes from the file, so it can be a lie.
+
+    `info()` reads a 28-byte fixed header out of it, and nothing bounded that
+    read. Below 12 bytes it leaked `struct.error`; between 12 and 27 it did
+    not raise at all and returned a *short* GUID -- a wrong answer, and the
+    one a caller would key a symbol-server lookup on. 12 and 20 are here for
+    that half, which is the more serious one.
+    """
+    pdb = _pdb_with_info_stream(b"\x00" * size)
+
+    with pytest.raises(MsfError, match=rf"is {size} bytes.*28-byte header"):
+        pdb.info()
+
+
+def test_a_pdb_info_stream_of_exactly_the_header_size_is_read():
+    """The bound has to be pinned from below too, or a stricter one would
+    reject a healthy file with nothing here to notice."""
+    pdb = _pdb_with_info_stream(_vc70_info())
+
+    info = pdb.info()
+    assert (info.version, info.signature, info.age) == (PDB.PDB_INFO_VC70,
+                                                        0xAABBCCDD, 1)
+    assert info.guid == b"\x11" * 16
+
+
+def test_a_pre_vc70_info_stream_is_refused_rather_than_given_a_guid():
+    """Older layouts put the named-stream map where the GUID now lives.
+
+    Reading 12..28 as a GUID there reports the map's own bytes as an identity
+    -- `llvm-pdbutil` refuses such a file outright rather than answering.
+    """
+    pdb = _pdb_with_info_stream(_vc70_info(version=19990604))
+
+    with pytest.raises(UnsupportedPdbError, match="predates VC70"):
+        pdb.info()
+
+
+def test_diagnose_says_the_info_stream_is_why_names_are_missing():
+    """An unreadable Info stream takes the named-stream map with it, so
+    `named_streams()` empties and `/names` cannot be found -- both in silence
+    without this."""
+    pdb = _pdb_with_info_stream(b"\x00" * 4)
+
+    d = pdb.diagnose()
+    assert d.pdb_info_error is not None
+    assert any("PDB Info stream cannot be read" in w for w in d.warnings)
+    assert pdb.named_streams() == {}
+
+
+def test_cli_info_on_a_short_info_stream_is_not_a_traceback(tmp_path, capsys):
+    """The half of this the library fix does not reach: `info()` is read
+    after the open, so guarding only `PDB.open` left the traceback in place."""
+    from purepdb.__main__ import main
+
+    path = tmp_path / "short-info.pdb"
+    path.write_bytes(_info_pdb_bytes(b"\x00" * 11))
+
+    assert main(["purepdb", "info", str(path)]) == 1
+    assert "too short for the" in capsys.readouterr().err
+
+
 def test_unrecognised_magic_still_raises_msf_error():
     with pytest.raises(MsfError, match="bad magic"):
         MsfFile(b"not a pdb at all" + b"\x00" * 512)

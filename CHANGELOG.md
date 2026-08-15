@@ -14,7 +14,25 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `PDB.info()` rejects a PDB Info stream shorter than the 28-byte header it
+  reads, with `MsfError`. The stream's length comes from the file, so it is a
+  bound the file can lie about, and nothing checked it: below 12 bytes the
+  read leaked `struct.error` out of the public API, and between 12 and 27 it
+  did not raise at all — it returned a **short GUID**, which is the more
+  serious half, since a truncated GUID is exactly what a caller would key a
+  symbol-server lookup on.
+- `PDB.info()` refuses a PDB Info stream older than VC70 with
+  `UnsupportedPdbError` rather than reporting a GUID. That layout has none:
+  the named-stream map begins where the GUID now sits, so the bytes reported
+  were the map's own. `llvm-pdbutil` refuses such a file outright.
+- `purepdb info` reports both of those instead of ending in a traceback: the
+  Info stream is read after the file is opened, so guarding only `PDB.open()`
+  left it uncovered.
+- `diagnose()` says when the PDB Info stream cannot be read. The named-stream
+  map lives in it, so `named_streams()` comes back empty and `/names` cannot
+  be found — both silently, until now.
 
 ## [0.3.0] - 2026-08-14
 

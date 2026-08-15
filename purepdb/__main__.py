@@ -51,7 +51,15 @@ def main(argv: list[str]) -> int:
         return 1
 
     if cmd == "info":
-        info = pdb.info()
+        # Guarded as well as the open: a short or too-old Info stream raises
+        # from this read rather than from `PDB.open`, so leaving it outside
+        # would still hand the user a traceback. Guarding the whole dispatch
+        # this way is what the command-table rewrite in issue #28 does.
+        try:
+            info = pdb.info()
+        except PdbError as exc:
+            print(f"error: {path}: {exc}", file=sys.stderr)
+            return 1
         print(f"version   : {info.version}")
         print(f"signature : {info.signature:#010x}")
         print(f"age       : {info.age}")
