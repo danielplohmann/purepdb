@@ -35,6 +35,33 @@ def test_msf_2_is_named():
         MsfFile(data)
 
 
+def test_a_short_pdb_info_stream_is_rejected_not_unpacked():
+    """The stream's length comes from the file, so it can be a lie.
+
+    `info()` reads a 28-byte fixed header out of it. Nothing bounded that
+    read, so a stream shorter than the header leaked `struct.error` -- from
+    `PDB.info()`, and from `purepdb info` -- rather than the one exception a
+    caller wraps.
+    """
+    module_syms = module_sym_stream(b"")
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_syms))
+    for size in (0, 4, 11, 27):
+        pdb = PDB.from_bytes(build_msf([
+            b"",
+            b"\x00" * size,  # the PDB Info stream, too short for its header
+            b"",
+            dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                       dbg_header=[0xFFFF] * 5 + [7]),
+            publics_hash_stream([]),
+            module_syms,
+            b"",
+            section_header(".text", 0x1000),
+        ]))
+        with pytest.raises(UnsupportedPdbError, match="too short for the"):
+            pdb.info()
+
+
 def test_unrecognised_magic_still_raises_msf_error():
     with pytest.raises(MsfError, match="bad magic"):
         MsfFile(b"not a pdb at all" + b"\x00" * 512)

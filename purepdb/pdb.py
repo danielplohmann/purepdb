@@ -24,7 +24,7 @@ from . import c13, codeview
 from .dbi import ContributionMap, DbiStream, ModuleInfo, SectionContribution
 from .gsi import PublicsStream
 from .ipi import IdTable
-from .msf import MsfFile
+from .msf import MsfFile, UnsupportedPdbError
 from .names import StringTable, parse_named_stream_map
 from .omap import OmapTable
 from .sections import SectionTable, sections_from_map
@@ -341,8 +341,23 @@ class PDB:
 
     # -- metadata -----------------------------------------------------------
 
+    # The fixed header of the PDB Info stream: version, signature, age, GUID.
+    PDB_INFO_HEADER_SIZE = 28
+
     def info(self) -> PdbInfo:
+        """Version, signature, age and GUID from the PDB Info stream.
+
+        Raises `UnsupportedPdbError` when that stream is shorter than the
+        header it must hold. The stream's length comes from the file, so this
+        is a bound the file can lie about, and reading past it would leak a
+        `struct.error` out of the public API.
+        """
         data = self.msf.read_stream(STREAM_PDB_INFO)
+        if len(data) < self.PDB_INFO_HEADER_SIZE:
+            raise UnsupportedPdbError(
+                f"the PDB Info stream is {len(data)} bytes, too short for the "
+                f"{self.PDB_INFO_HEADER_SIZE}-byte header"
+            )
         version, signature, age = struct.unpack_from("<III", data, 0)
         guid = data[12:28]
         return PdbInfo(version=version, signature=signature, age=age, guid=guid)
