@@ -676,3 +676,15 @@ def test_a_console_that_cannot_encode_a_name_still_lists(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "Traceback" not in proc.stderr
     assert "0x00001050" in proc.stdout
+
+
+def test_a_hostile_file_name_is_escaped_in_the_error(tmp_path, capsys):
+    """`purepdb functions *` over an untrusted directory: the name of a file
+    that fails to open is as attacker-chosen as the records inside one."""
+    path = tmp_path / "quiet.pdb\x1b[2K\rHACKED"
+    path.write_bytes(b"not a pdb at all" + b"\x00" * 512)
+
+    assert main(["purepdb", "functions", str(path)]) == 1
+    err = capsys.readouterr().err
+    assert "\x1b" not in err and "\r" not in err
+    assert r"quiet.pdb\x1b[2K\x0dHACKED" in err
