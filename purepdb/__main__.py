@@ -171,6 +171,10 @@ def _data(pdb: PDB) -> int:
     and a file-static symbol appears in both -- 633 records for 481 distinct
     addresses on sqlite3 x86. The count says "records" rather than quietly
     over-reporting how many symbols the file describes.
+
+    The noun is tied to that repetition: if `data_symbols()` ever deduplicates,
+    both it and the `_COMMANDS` entry below become wrong in the other
+    direction, under-claiming records for a listing that now holds symbols.
     """
     symbols = pdb.data_symbols()
     for d in symbols:

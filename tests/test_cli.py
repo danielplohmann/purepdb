@@ -708,8 +708,14 @@ def _in_a_subprocess(body: str, *, argv: str) -> subprocess.CompletedProcess:
         f"sys.argv = {argv}\n"
         "raise SystemExit(cli())\n"
     )
+    # PYTHONUNBUFFERED is dropped rather than inherited: the exit-time flush is
+    # the thing under test, and an unbuffered child writes at the `print()`
+    # instead, reaching a different branch entirely. It is commonly exported in
+    # containers and by editor test runners, where these tests would otherwise
+    # fail for a reason that has nothing to do with the code.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
     return subprocess.run([sys.executable, "-c", program],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env)
 
 
 def test_a_stdout_closed_by_the_shell_is_reported_not_a_traceback():
