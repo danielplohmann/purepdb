@@ -220,9 +220,13 @@ def test_labels_are_not_in_the_function_list(pdb_rel, image_rel, n_labels,
     pdb = _open(pdb_rel)
     names = {n for f in pdb.functions() for n in f.names}
     entry_points = {(f.segment, f.offset) for f in pdb.functions()}
+    checked = 0
     for label in pdb.labels():
         assert label.name not in names
         assert (label.segment, label.offset) not in entry_points
+        checked += 1
+
+    assert checked == n_labels, "the loop must have had something to check"
 
 
 def test_rust_lld_emits_label_records_that_name_and_locate_nothing():
