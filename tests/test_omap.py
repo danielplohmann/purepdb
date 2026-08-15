@@ -23,6 +23,7 @@ from tests._synth import (
     build_msf,
     dbi_stream,
     gproc32,
+    label32,
     module_info,
     module_sym_stream,
     omap_stream,
@@ -134,6 +135,24 @@ def test_rvas_are_translated_to_the_shipped_layout():
     assert by_name["second"].rva == 0x8000
     # segment:offset stays as the record spells it -- only the rva moves.
     assert by_name["first"].offset == 0x000
+
+
+def test_a_label_is_translated_like_any_other_address():
+    """`labels()` resolves through `to_rva`, so it must go through the map too.
+
+    An untranslated label would point into the pre-optimisation layout, where
+    on a BBT-processed image nothing lives. The module records here are a
+    procedure and a label inside it.
+    """
+    pdb = _pdb(procs=[gproc32("host", 1, 0x000, code_size=0x80),
+                      label32("host_retry", 1, 0x010)],
+               original_sections=ORIGINAL, final_sections=FINAL, omap=MOVED)
+
+    label = pdb.labels()[0]
+    assert label.offset == 0x010, "segment:offset stays as the record spells it"
+    assert label.rva == 0x8110
+    assert pdb.functions()[0].rva == 0x8100, "and the body it sits in moved too"
+    assert "host_retry" not in {f.name for f in pdb.functions()}
 
 
 def test_functions_are_sorted_by_the_translated_address():

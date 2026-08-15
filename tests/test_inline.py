@@ -346,3 +346,32 @@ def test_an_opcode_outside_the_defined_range_ends_the_walk():
 
     # What comes before an unknown opcode is still real and is kept.
     assert _ranges(bytes([0x0B, 0x04, 0x04, 0x03, 0x0E, 0x63, 0x04, 0x03])) == [(4, 3)]
+
+
+def test_a_site_that_cannot_be_placed_is_counted_and_explained():
+    """An inline site with no code to point at has no address to report.
+
+    Leaving it out of the listing is right -- there is nowhere to put it --
+    but leaving it out silently means `diagnose()` counts a record the listing
+    does not have, with nothing to say where it went.
+    """
+    empty = inline_site(inlinee=0x1000, annotations=b"")
+    placed = inline_site(inlinee=0x1000,
+                         annotations=bytes([0x0B, 0x04, 0x04, 0x03]))
+    pdb = _pdb(module_records=_proc_with_sites(empty + placed),
+               ipi=ipi_stream([("func", "helper")]))
+
+    d = pdb.diagnose()
+    assert len(pdb.inline_sites()) == 1
+    assert d.inline_sites == 2, "both records are there"
+    assert d.unplaced_inline_sites == 1
+    assert any("no address to report" in w for w in d.warnings)
+
+
+def test_a_healthy_file_reports_no_unplaced_sites():
+    pdb = _pdb(module_records=_proc_with_sites(
+        inline_site(inlinee=0x1000, annotations=bytes([0x0B, 0x04, 0x04, 0x03]))),
+        ipi=ipi_stream([("func", "helper")]))
+    d = pdb.diagnose()
+    assert (d.inline_sites, d.unplaced_inline_sites) == (1, 0)
+    assert d.warnings == [w for w in d.warnings if "inline site" not in w]

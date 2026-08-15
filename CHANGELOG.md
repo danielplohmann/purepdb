@@ -14,7 +14,26 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `S_LABEL32` decoding: named code addresses inside procedures — assembly
+  labels, exception continuation targets, interrupt-return points. `PDB.labels()`,
+  `Label`, `codeview.LabelSymbol`, and `Diagnostics.labels`. They are
+  deliberately *not* merged into `functions()`, because a label is an address
+  within a body that already has an entry point.
+- `diagnose()` accounts for every record purepdb drops. `malformed_records`
+  now covers each kind with a parser rather than only publics, procs and data;
+  `Diagnostics.undecoded_constants` covers a constant whose numeric leaf is one
+  purepdb does not decode, which loses the name with the value; and
+  `Diagnostics.unplaced_inline_sites` covers a site whose annotations describe
+  no code. Each has a warning, so no record can now go missing in silence.
+- `dev/validate_against_llvm.py`, which cross-checks purepdb against
+  `llvm-pdbutil` record by record — procedures, publics, labels, constants,
+  UDTs, the section-contribution table and the module attribution built on it,
+  every `file:line` entry, and every inline site with all of its code ranges.
+  It skips cleanly when the toolchain is absent and exits non-zero on any
+  disagreement. A nightly CI job runs it; it is deliberately not run on pull
+  requests, where a reference-tool version bump would fail unrelated changes.
 
 ## [0.3.0] - 2026-08-14
 

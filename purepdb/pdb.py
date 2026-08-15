@@ -120,6 +120,21 @@ class InlineFunction:
 
 
 @dataclass
+class Label:
+    """A named code address inside a function, from an `S_LABEL32` record.
+
+    A label is somewhere to jump to within a body that already has an entry
+    point, so it is not a `Function` and does not appear in `functions()`.
+    """
+
+    name: str
+    segment: int
+    offset: int
+    rva: int | None
+    flags: int  # CV_PROCFLAGS, as the record carries it
+
+
+@dataclass
 class PdbInfo:
     version: int
     signature: int
@@ -182,6 +197,21 @@ class Diagnostics:
     """Byte offset where the ModuleInfo walk stopped, or None when it read the
     whole substream. Non-None means `modules` is short and the symbols in the
     modules never reached are missing."""
+    labels: int = 0
+    """S_LABEL32 *records* in the module streams -- named code addresses, which
+    are not entry points, so `labels()` rather than `functions()` is where they
+    live. This counts records; a record too short to decode is counted here and
+    in `malformed_records`, and `labels()` is one shorter."""
+    undecoded_constants: int = 0
+    """S_CONSTANT records whose value uses a numeric leaf purepdb does not
+    decode -- a float, say. They are not malformed, so `malformed_records` does
+    not cover them, but the name sits after the value, so an unknown value
+    length loses the name too and `constants()` is that much shorter."""
+    unplaced_inline_sites: int = 0
+    """S_INLINESITE records `inline_sites()` cannot report: their annotations
+    describe no code, or no open procedure encloses them, so there is no
+    address to give. `inline_sites` counts the records; this counts the ones
+    missing from the listing."""
 
     @property
     def truncated_streams(self) -> int:
@@ -295,6 +325,19 @@ class Diagnostics:
                 f"module streams hold {self.proc_records}; the {short} is short "
                 f"by {abs(self.proc_refs - self.proc_records)}. Both describe "
                 f"the same set, so one of them is being read incompletely"
+            )
+        if self.undecoded_constants:
+            out.append(
+                f"{self.undecoded_constants} constant(s) hold a value in a "
+                f"numeric leaf purepdb does not decode; their names sit after "
+                f"the value, so those records are missing from constants() "
+                f"entirely"
+            )
+        if self.unplaced_inline_sites:
+            out.append(
+                f"{self.unplaced_inline_sites} inline site(s) have no address "
+                f"to report: their annotations describe no code, or no open "
+                f"procedure encloses them, so inline_sites() leaves them out"
             )
         if self.line_bytes and not self.has_string_table:
             out.append(
@@ -607,6 +650,33 @@ class PDB:
             out.extend(codeview.extract_trampolines(self.module_symbol_bytes(mod)))
         return out
 
+    def labels(self) -> list[Label]:
+        """Named code addresses (S_LABEL32) across all module streams.
+
+        Deliberately not part of `functions()`, for the same reason trampolines
+        are not: a label sits *inside* a procedure, so listing it as a function
+        would count one body twice and put an address in the function list that
+        nothing calls. What it does give is a name for the addresses a
+        disassembler most wants named -- interrupt-return points, exception
+        continuation targets, the entry a hand-written stub jumps back to.
+
+        Module streams only, unlike `data_symbols()`: a label is scoped to the
+        procedure it sits in, and neither `link.exe` nor `rust-lld` puts one in
+        the symbol-record stream -- `llvm-pdbutil dump --globals` finds none on
+        any fixture, and neither does a direct scan of that stream.
+        """
+        out: list[Label] = []
+        for mod in self.dbi.modules:
+            for label in codeview.extract_labels(self.module_symbol_bytes(mod)):
+                out.append(Label(
+                    name=label.name,
+                    segment=label.segment,
+                    offset=label.offset,
+                    rva=self.to_rva(label.segment, label.offset),
+                    flags=label.flags,
+                ))
+        return out
+
     def id_table(self) -> IdTable | None:
         """The IPI stream's item id -> name map, or None when there is none."""
         if isinstance(self._id_table, _Unread):
@@ -791,10 +861,11 @@ class PDB:
                 truncations.append((f"module {mod.index} ({mod.module_name})", t))
 
         idx = self.dbi.symrecord_stream_index
-        proc_refs = 0
+        proc_refs = undecoded_constants = 0
         if self.msf.is_valid_stream(idx):
             symrecords = self.msf.read_stream(idx)
             malformed += codeview.count_malformed_records(symrecords)
+            undecoded_constants = codeview.count_undecoded_constants(symrecords)
             t = codeview.find_truncation(symrecords)
             if t is not None:
                 truncations.append(("the symbol-record stream", t))
@@ -818,6 +889,13 @@ class PDB:
             has_original_sections=self._original_sections is not None,
             section_contributions=len(self._contributions),
             inline_sites=kinds.get(codeview.S_INLINESITE, 0),
+            labels=kinds.get(codeview.S_LABEL32, 0),
+            undecoded_constants=undecoded_constants,
+            # The gap between the records and the listing, which is the only
+            # way a caller learns that a site was found and could not be
+            # placed. Decoding them costs 0.03s on the 3797-site fixture.
+            unplaced_inline_sites=(kinds.get(codeview.S_INLINESITE, 0)
+                                   - len(self.inline_sites())),
             proc_refs=proc_refs,
             line_bytes=line_bytes,
             has_string_table=self.string_table() is not None,

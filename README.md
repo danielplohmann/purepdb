@@ -115,13 +115,36 @@ On the Rust fixture that is 3797 sites against 248 procedure records — fifteen
 inlined bodies for every function with an entry point, and the largest naming
 gap the parser had.
 
+## Labels
+
+`S_LABEL32` names a code address *inside* a function — an assembly label, an
+exception continuation target, the address an interrupt returns to. It is not
+an entry point, so like a trampoline it stays out of `functions()`: listing one
+would count a body twice.
+
+```python
+for label in pdb.labels():
+    print(hex(label.rva or 0), label.name)
+```
+
+sqlite3 x86 has 1412 of them and x64 1237, every one inside a function body
+purepdb already found, and not one of those 586 distinct names appears in any
+other listing.
+
+Not every producer fills the record in: all 160 in the Rust fixture are twelve
+bytes of fixed fields with an empty name and segment 0. The offset is real, but
+segment 0 names no section, so nothing resolves. They are still reported,
+because the count is what the file says; a caller wanting the useful ones
+filters on `label.rva is not None`.
+
 ## Scope
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
 `S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
-`S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary annotations;
+`S_THUNK32`, `S_TRAMPOLINE`, `S_LABEL32`, `S_INLINESITE` with its binary
+annotations;
 section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
 fallback when that table is absent; OMAP address translation for images whose
 code was moved after linking; the named stream map, the `/names` string table
@@ -193,6 +216,21 @@ is a maintainer decision rather than something a workflow should assume.
 installing purepdb does not pull down 12 MB of binaries. Those tests skip when
 the data is absent — clone the repo to run them.
 
-The suite needs no external tool. Results are also cross-checked
-record-by-record against `llvm-pdbutil` during development, where that toolchain
-is available.
+The suite needs no external tool. The cross-check against the reference
+implementation therefore lives outside it, in `dev/validate_against_llvm.py`:
+
+```bash
+python dev/validate_against_llvm.py                  # tests/data/**/*.pdb
+python dev/validate_against_llvm.py path/to/one.pdb   # or a private corpus
+```
+
+It compares purepdb against `llvm-pdbutil` **record by record**, not by total:
+procedures, publics, labels, constants, UDTs, the section-contribution table
+and the module each function is attributed to through it, every `file:line`
+entry, and every inlined body with all of its code ranges. It exits non-zero on
+any disagreement, printing the records that differ — and equally on a file it
+could not open or a corpus with no PDBs in it, because a run that verified
+nothing must not report success. It skips with a message when `llvm-pdbutil` is
+not installed, so running it is never a requirement. A nightly GitHub Actions
+job runs it with `--require-tool`, which turns a missing toolchain into a
+failure rather than a silent pass.

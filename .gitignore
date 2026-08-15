@@ -1,4 +1,7 @@
-dev/
+# A scratch directory, except for the cross-check a CI job has to be able to
+# run, which therefore has to be in the repository.
+dev/*
+!dev/validate_against_llvm.py
 HANDOFF.md
 __pycache__/
 *.py[cod]
