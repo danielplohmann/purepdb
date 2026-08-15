@@ -19,6 +19,7 @@ description and nowhere else:
 
     procs           S_*PROC32 name, address and code size
     publics         S_PUB32 name, address and function flag
+    labels          S_LABEL32 name and address
     constants       S_CONSTANT name and value
     udts            S_UDT name and type index
     contributions   the Section Contribution table, and the module each
@@ -222,6 +223,25 @@ def check_publics(pdb: PDB, text: str) -> Result:
     return Result(ours, theirs)
 
 
+def check_labels(pdb: PDB, text: str) -> Result:
+    """S_LABEL32 by name and address, including the ones that carry neither.
+
+    A nameless label with segment 0 is a real record that rust-lld emits, and
+    both sides report it, so it is compared rather than filtered -- dropping it
+    on either side would hide a producer purepdb has to keep reading.
+    """
+    ours = [(label.name, label.segment, label.offset) for label in pdb.labels()]
+    theirs = []
+    for rec in iter_records(text):
+        if rec.kind != "S_LABEL32":
+            continue
+        addr = rec.address()
+        if addr is None:
+            raise ParseError(f"no address on S_LABEL32 `{rec.name}`")
+        theirs.append((rec.name, addr[0], addr[1]))
+    return Result(ours, theirs)
+
+
 def check_constants(pdb: PDB, text: str) -> Result:
     ours = [(c.name, c.value) for c in pdb.constants()]
     theirs = []
@@ -412,6 +432,7 @@ def check_inline_sites(pdb: PDB, text: str) -> Result:
 CHECKS = [
     Check("procs", ("--symbols",), check_procs),
     Check("publics", ("--publics",), check_publics),
+    Check("labels", ("--symbols",), check_labels),
     Check("constants", ("--globals",), check_constants),
     Check("udts", ("--globals",), check_udts),
     Check("contributions", ("--section-contribs",), check_contributions),
