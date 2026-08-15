@@ -251,6 +251,40 @@ def test_sections_prints_the_pre_bbt_table_when_that_is_the_only_one(tmp_path,
     assert "1 sections" in err
 
 
+def test_sections_falls_back_to_the_section_map_when_neither_table_is_there(
+        tmp_path, capsys):
+    """The third link of the chain, and the last one that answers anything.
+
+    With no slot 5 and no slot 10 the segments are rebuilt from DBI's Section
+    Map, which records sizes but no addresses -- so the listing exists and
+    every address in it is a reconstruction, which is what the warning says.
+    """
+    from tests._synth import section_map
+
+    module_stream = module_sym_stream(gproc32("main", 1, 0x40))
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    path = tmp_path / "sectionmap-only.pdb"
+    path.write_bytes(build_msf([
+        b"",
+        pdb_info_stream({}),
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 11,
+                   sec_map=section_map([(0x109, 1, 0x2000)])),
+        publics_hash_stream([]),
+        module_stream,
+        b"",
+    ]))
+
+    out, err = _run(capsys, "sections", str(path))
+
+    assert len(out) == 1, "the rebuilt table is the only one left"
+    assert out[0].startswith("0x")
+    assert any("rebuilt" in line or "reconstruction" in line for line in err), (
+        "a rebuilt table must say every address in it is a reconstruction")
+
+
 def test_labels(sample, capsys):
     out, err = _run(capsys, "labels", sample)
     assert out == ["0x00001050  main_retry"]
@@ -398,26 +432,57 @@ def test_an_unresolvable_address_is_not_printed_as_a_number(tmp_path, capsys):
 
 REAL = (Path(__file__).resolve().parent / "data" / "rustpe"
         / "rust_pe_symbols_msvc.pdb")
+SQLITE = (Path(__file__).resolve().parent / "data" / "sqlite" / "x86"
+          / "sqlite3.pdb")
 
-# Every listing whose first column is an address. The synthetic sample cannot
-# check these: its names hold no spaces, its code sizes are three hex digits,
-# and its paths are short -- so it agrees with any column layout at all.
-ADDRESS_FIRST = ["functions", "data", "labels", "thunks", "trampolines",
-                 "inline", "lines", "sections"]
+# Every listing whose first column is an address, each against a fixture that
+# actually holds records of that kind. The synthetic sample cannot check these:
+# its names hold no spaces, its code sizes are three hex digits, and its paths
+# are short -- so it agrees with any column layout at all. And one fixture is
+# not enough either: rustpe has no thunks and no trampolines, while the sqlite
+# builds have no inline sites, so a single choice leaves some loop empty and
+# the case passes having checked nothing.
+ADDRESS_FIRST = [
+    ("functions", REAL),
+    ("data", REAL),
+    ("labels", REAL),
+    ("thunks", SQLITE),
+    ("trampolines", SQLITE),
+    ("inline", REAL),
+    ("lines", REAL),
+    ("sections", REAL),
+]
 
 
-def _real(capsys, command):
-    if not REAL.exists():
+def _real(capsys, command, path=REAL):
+    if not path.exists():
         pytest.skip("groundtruth fixture missing")
-    return _run(capsys, command, str(REAL))[0]
+    return _run(capsys, command, str(path))[0]
 
 
-@pytest.mark.parametrize("command", ADDRESS_FIRST)
-def test_the_first_column_is_an_address_on_a_real_pdb(command, capsys):
-    for line in _real(capsys, command):
+@pytest.mark.parametrize("command,fixture", ADDRESS_FIRST)
+def test_the_first_column_is_an_address_on_a_real_pdb(command, fixture,
+                                                      capsys):
+    lines = _real(capsys, command, fixture)
+
+    for line in lines:
         first = line.split()[0]
         assert re.fullmatch(r"0x[0-9a-f]{8}|\?{6}", first), (
             f"{command}: {first!r} is not an address")
+
+    assert lines, f"{command} printed nothing, so this checked no column"
+
+
+def test_an_empty_name_is_printed_as_a_placeholder(capsys):
+    """A blank would shorten the line and shift every column after it.
+
+    Not hypothetical: all 160 label records in the rustpe fixture carry an
+    empty name and segment 0, so this is what that whole listing looks like.
+    """
+    lines = _real(capsys, "labels")
+
+    assert lines, "the fixture is supposed to hold labels"
+    assert set(lines) == {"    ??????  ?"}
 
 
 def test_a_name_with_spaces_survives_being_printed(capsys):
@@ -741,6 +806,14 @@ def test_a_warning_quoting_a_hostile_module_name_is_escaped(tmp_path, capsys):
     assert any("stopped early" in line for line in err), "expected the warning"
     for line in err:
         assert "\x1b" not in line and "\r" not in line
+
+    # `diagnose` prints the same warnings through a different path -- as its
+    # report rather than as a listing's trailer -- and it is the command a
+    # reader runs *because* a file looked wrong, so on the most hostile input.
+    out, _err = _run(capsys, "diagnose", str(path))
+    assert any("stopped early" in line for line in out), "expected the warning"
+    for line in out:
+        assert "\x1b" not in line and "\r" not in line
     escaped = r"quiet.obj\x1b[2K\x0dHACKED\x0anext.obj"
     assert any(escaped in line for line in err)
 
@@ -827,3 +900,41 @@ def test_a_hostile_file_name_is_escaped_in_the_error(capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "\x1b" not in err and "\r" not in err
     assert r"quiet.pdb\x1b[2K\x0dHACKED" in err
+
+
+def test_a_hostile_exception_message_is_escaped(capsys, monkeypatch):
+    """The other half of that line. A `PdbError` quotes what it found -- a
+    stream description, a module name -- so the message is file-supplied even
+    when the path is not."""
+    def unreadable(_path):
+        raise MsfError("module \x1b[2K\rHACKED is not a stream")
+
+    monkeypatch.setattr(PDB, "open", staticmethod(unreadable))
+    assert main(["purepdb", "functions", "fine.pdb"]) == 1
+
+    err = capsys.readouterr().err
+    assert "\x1b" not in err and "\r" not in err
+    assert r"module \x1b[2K\x0dHACKED" in err
+
+
+def test_a_hostile_os_error_is_escaped(capsys, monkeypatch):
+    """An OSError carries the file name it failed on, which is the same
+    attacker-chosen string, through a different branch."""
+    def unreadable(_path):
+        raise OSError(2, "No such file \x1b[2K\rHACKED")
+
+    monkeypatch.setattr(PDB, "open", staticmethod(unreadable))
+    assert main(["purepdb", "functions", "fine.pdb"]) == 1
+
+    err = capsys.readouterr().err
+    assert "\x1b" not in err and "\r" not in err
+    assert "HACKED" in err
+
+
+def test_an_unknown_command_is_escaped(capsys):
+    """Typed by the user rather than read from a file, but echoed back, and
+    the escaping rule is one rule."""
+    assert main(["purepdb", "func\x1b[2K\rHACKED", "x.pdb"]) == 2
+
+    err = capsys.readouterr().err
+    assert "\x1b" not in err and "\r" not in err
