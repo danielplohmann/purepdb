@@ -26,6 +26,11 @@ resolve *differently* would be breaking, and would say so here.
   field states what a caller otherwise has to infer from the shape of the
   mangled names — a Rust module says `Rust`, and the linker's own contribution
   says `Link`. `purepdb.CompileInfo`.
+- CLI subcommands for every listing the library produces: `lines`, `inline`,
+  `thunks`, `trampolines`, `labels`, `constants`, `udts` and `modules`, beside
+  the existing `functions`, `publics`, `info` and `diagnose`. Output is one
+  record per line with stable leading columns; counts and warnings go to
+  stderr. `purepdb` with no arguments lists every command and its columns.
 - `S_LABEL32` decoding: named code addresses inside procedures — assembly
   labels, exception continuation targets, interrupt-return points. `PDB.labels()`,
   `Label`, `codeview.LabelSymbol`, and `Diagnostics.labels`. They are

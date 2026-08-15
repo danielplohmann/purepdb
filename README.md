@@ -51,13 +51,29 @@ first. On sqlite3 x86 that is 438 of 3620 functions, worst case 4 names.
 70157 of them in sqlite3 x86, across 133 files. It is a generator; the file
 names come from the `/names` stream, which `pdb.named_streams()` locates.
 
-CLI:
+CLI — every listing the library produces has a subcommand:
 
 ```
-purepdb functions app.pdb    # name + entry-point RVA
-purepdb publics   app.pdb
-purepdb info      app.pdb
-purepdb diagnose  app.pdb    # what the PDB contains, and why a listing is thin
+purepdb functions    app.pdb    # rva  source  size  name
+purepdb publics      app.pdb    # seg  off  kind  name
+purepdb labels       app.pdb    # rva  name
+purepdb thunks       app.pdb    # rva  size  ordinal  name
+purepdb trampolines  app.pdb    # rva  size  -> target rva
+purepdb inline       app.pdb    # rva  size  name  <- parent
+purepdb lines        app.pdb    # rva  file:line
+purepdb constants    app.pdb    # value  name
+purepdb udts         app.pdb    # type-index  name
+purepdb modules      app.pdb    # contributions  module
+purepdb info         app.pdb    # version/age/GUID
+purepdb diagnose     app.pdb    # what the PDB contains, and why a listing is thin
+```
+
+`purepdb` with no arguments lists them all. Output is one record per line with
+stable leading columns; record counts and warnings go to stderr, so a
+redirected stdout holds records and nothing else:
+
+```bash
+purepdb functions app.pdb | awk '$1 != "??????" {print $1}' | sort
 ```
 
 ## When a listing comes back short
@@ -75,7 +91,7 @@ WARNING: no procedure records in 285 module streams (dominant kinds:
 produce
 ```
 
-The CLI prints these warnings automatically after `functions` and `publics`.
+The CLI prints these warnings to stderr after every listing.
 
 ## Two things worth knowing about publics
 
