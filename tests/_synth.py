@@ -469,3 +469,14 @@ def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74,
     """S_GDATA32, or S_LDATA32 with `kind=0x110C`: same layout either way."""
     payload = struct.pack("<IIH", type_index, offset, segment) + name.encode() + b"\x00"
     return make_record(kind, payload)
+
+
+def thread32(name: str, segment: int, offset: int, *, kind: int = 0x1113,
+             type_index: int = 0x74) -> bytes:
+    """S_GTHREAD32 (0x1113) by default, S_LTHREAD32 (0x1112) on request.
+
+    Packed here rather than by reusing `gdata32`'s bytes with the kind swapped,
+    so that the layout this asserts is one the builder states independently.
+    """
+    payload = struct.pack("<IIH", type_index, offset, segment) + name.encode() + b"\x00"
+    return make_record(kind, payload)

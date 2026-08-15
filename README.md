@@ -157,6 +157,34 @@ One record per module is the common case, not the rule — an import library
 arrives as a single module holding the records of every member, so 145 of
 sqlite3 x64's records come from 67 modules.
 
+## Thread-local variables
+
+`__declspec(thread)` and `thread_local` variables are `S_GTHREAD32` /
+`S_LTHREAD32` records, and `pdb.thread_locals()` reports them — deliberately
+not `data_symbols()`, because the address means something different:
+
+```python
+for tl in pdb.thread_locals():
+    print(hex(tl.template_rva or 0), tl.name, tl.is_global)
+```
+
+An ordinary data symbol's `segment:offset` is where the variable is. A
+thread-local's is where its *initial value* is: a slot in the image's TLS
+template, which every new thread's private copy is initialised from. The
+variable itself lives at an address computed from the TEB at run time and is in
+no section of the image, so there is nothing here to report as an `rva`. The
+field is called `template_rva` for that reason — pairing one with a
+`Function.rva` compares two different address spaces, and it should have to be
+done on purpose.
+
+The template address is genuinely useful for reading initial values out of the
+image: the four variables in the `tls` fixture initialise to 7, 13, 11 and 17,
+and those are the integers the PE holds at the four addresses reported.
+
+`diagnose()` reports `thread_local_records`, so a `data_symbols()` listing that
+omits a variable the caller knows is in the binary has an explanation rather
+than being silently short.
+
 ## Scope
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
@@ -170,6 +198,15 @@ translation for images whose code was moved after linking; the named stream
 map, the
 `/names` string table and the C13 `DEBUG_S_LINES` / `DEBUG_S_FILECHECKSUMS`
 subsections for `rva -> file:line`; the IPI id records that name an inlinee.
+
+`S_GDATA32`/`S_LDATA32`, `S_GTHREAD32`/`S_LTHREAD32`,
+`S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
+`S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary annotations;
+section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
+fallback when that table is absent; OMAP address translation for images whose
+code was moved after linking; the named stream map, the `/names` string table
+and the C13 `DEBUG_S_LINES` / `DEBUG_S_FILECHECKSUMS` subsections for `rva ->
+file:line`; the IPI id records that name an inlinee.
 
 **Not supported:** TPI type decoding, column info, demangling (names come back
 raw). The IPI stream is read only for the names inlined bodies refer to by id;

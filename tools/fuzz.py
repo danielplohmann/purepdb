@@ -71,6 +71,7 @@ def exercise(data: bytes) -> list:
         pdb.public_symbols(),
         pdb.module_procs(),
         pdb.data_symbols(),
+        pdb.thread_locals(),
         pdb.constants(),
         pdb.udts(),
         pdb.compile_info(),

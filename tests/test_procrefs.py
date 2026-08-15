@@ -169,7 +169,8 @@ def _open(rel):
 
 
 FIXTURES = ["sqlite/x86/sqlite3.pdb", "sqlite/x64/sqlite3.pdb",
-            "rustpe/rust_pe_symbols_msvc.pdb", "rustpe32/rust_pe_symbols_i686.pdb"]
+            "rustpe/rust_pe_symbols_msvc.pdb", "rustpe32/rust_pe_symbols_i686.pdb",
+            "tls/tls_symbols.pdb"]
 
 
 @pytest.mark.parametrize("rel,n_refs", [
@@ -177,6 +178,7 @@ FIXTURES = ["sqlite/x86/sqlite3.pdb", "sqlite/x64/sqlite3.pdb",
     pytest.param("sqlite/x64/sqlite3.pdb", 3522, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 248, id="rustpe-msvc"),
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 2, id="rustpe-i686"),
+    pytest.param("tls/tls_symbols.pdb", 2, id="tls-x64"),
 ])
 def test_the_globals_index_every_procedure(rel, n_refs):
     pdb = _open(rel)

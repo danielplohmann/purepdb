@@ -36,11 +36,15 @@ S_PROC_ID_END = 0x114F
 S_LDATA32 = 0x110C     # local (static) data symbol
 S_GDATA32 = 0x110D     # global data symbol
 
+S_LTHREAD32 = 0x1112   # thread-local data symbol, internal linkage
+S_GTHREAD32 = 0x1113   # ... and external linkage
+
 S_PROCREF = 0x1125     # globals index entry for a global procedure
 S_LPROCREF = 0x1127    # ... and for a static one
 
 PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID})
 _DATA_KINDS = frozenset({S_LDATA32, S_GDATA32})
+THREAD_KINDS = frozenset({S_LTHREAD32, S_GTHREAD32})
 PROC_REF_KINDS = frozenset({S_PROCREF, S_LPROCREF})
 
 # Kinds we don't decode but can name, so a diagnostic report reads as something
@@ -89,6 +93,8 @@ KIND_NAMES: dict[int, str] = {
     S_INLINESITE_END: "S_INLINESITE_END",
     S_LDATA32: "S_LDATA32",
     S_GDATA32: "S_GDATA32",
+    S_LTHREAD32: "S_LTHREAD32",
+    S_GTHREAD32: "S_GTHREAD32",
     S_PUB32: "S_PUB32",
     S_LPROC32: "S_LPROC32",
     S_GPROC32: "S_GPROC32",
@@ -438,6 +444,29 @@ class DataSymbol:
 
 
 @dataclass
+class ThreadLocalSymbol:
+    """S_GTHREAD32/S_LTHREAD32: a `__declspec(thread)` or `thread_local` variable.
+
+    The fixed portion is laid out exactly like `DataSymbol`'s, and the type is
+    separate for what the address *means* rather than for how it is read.
+    `segment:offset` points into the image's TLS initialisation template -- the
+    bytes each new thread's copy is initialised from -- and not at the variable,
+    which lives at a per-thread address computed from the TEB at runtime and is
+    in no section of the image at all.
+    """
+
+    name: str
+    segment: int      # 1-based section index, the .tls section in practice
+    offset: int       # offset within the TLS template, not within the image
+    type_index: int
+    kind: int         # S_GTHREAD32 or S_LTHREAD32
+
+    @property
+    def is_global(self) -> bool:
+        return self.kind == S_GTHREAD32
+
+
+@dataclass
 class RawRecord:
     kind: int
     payload: bytes
@@ -544,6 +573,8 @@ def parse_record(kind: int, payload: bytes):
         return parse_compile_info(payload)
     if kind == S_INLINESITE:
         return parse_inline_site(payload)
+    if kind in THREAD_KINDS:
+        return parse_thread_local(kind, payload)
     return None
 
 
@@ -946,6 +977,29 @@ def parse_data(kind: int, payload: bytes) -> DataSymbol:
         name=name, segment=segment, offset=offset,
         type_index=type_index, kind=kind,
     )
+
+
+def parse_thread_local(kind: int, payload: bytes) -> ThreadLocalSymbol:
+    """Same fixed portion as `parse_data`; see `ThreadLocalSymbol` for why the
+    address it carries is not the same kind of address."""
+    r = Reader(payload)
+    type_index = r.u32()
+    offset = r.u32()
+    segment = r.u16()
+    return ThreadLocalSymbol(
+        name=r.cstring(), segment=segment, offset=offset,
+        type_index=type_index, kind=kind,
+    )
+
+
+def extract_thread_locals(data: bytes) -> list[ThreadLocalSymbol]:
+    out: list[ThreadLocalSymbol] = []
+    for rec in iter_records(data):
+        if rec.kind in THREAD_KINDS:
+            sym = decode_record(rec.kind, rec.payload)
+            if sym is not None:
+                out.append(sym)
+    return out
 
 
 def extract_data(data: bytes) -> list[DataSymbol]:

@@ -17,6 +17,7 @@ from .codeview import (
     ProcRef,
     ProcSymbol,
     PublicSymbol,
+    ThreadLocalSymbol,
     Truncation,
     UserDefinedType,
 )
@@ -34,6 +35,7 @@ from .pdb import (
     Label,
     Line,
     PdbInfo,
+    ThreadLocal,
 )
 from .sections import (
     Section,
@@ -71,6 +73,8 @@ __all__ = [
     "SectionMapEntry",
     "SectionTable",
     "StringTable",
+    "ThreadLocal",
+    "ThreadLocalSymbol",
     "Truncation",
     "UnsupportedPdbError",
     "UserDefinedType",

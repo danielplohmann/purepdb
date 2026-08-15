@@ -37,6 +37,18 @@ resolve *differently* would be breaking, and would say so here.
   purepdb does not decode, which loses the name with the value; and
   `Diagnostics.unplaced_inline_sites` covers a site whose annotations describe
   no code. Each has a warning, so no record can now go missing in silence.
+- Thread-local variables: `S_GTHREAD32`/`S_LTHREAD32` are decoded and reported
+  by `PDB.thread_locals()`, which is deliberately separate from
+  `data_symbols()` rather than part of it. A thread-local's `segment:offset`
+  addresses the TLS initialisation template, not the variable — which has no
+  address in the image at all — so the field is `template_rva` rather than
+  `rva`, and the two are not comparable. `ThreadLocal`, `ThreadLocalSymbol`.
+- `Diagnostics.thread_local_records`, and a warning when a file has thread-local
+  records — `data_symbols()` deliberately omits them, and a short listing with
+  no explanation is the thing `diagnose()` exists to prevent.
+- A `tls` fixture: a freestanding x64 PE and PDB carrying both thread-local
+  record kinds, with the four template addresses cross-checked against the
+  initial values in the image.
 
 ### Fixed
 

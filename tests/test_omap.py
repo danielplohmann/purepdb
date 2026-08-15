@@ -427,6 +427,7 @@ def test_cli_diagnose_mentions_the_address_map(tmp_path, capsys):
     "sqlite/x86/sqlite3.pdb",
     "sqlite/x64/sqlite3.pdb",
     "rustpe/rust_pe_symbols_msvc.pdb", "rustpe32/rust_pe_symbols_i686.pdb",
+    "tls/tls_symbols.pdb",
 ])
 def test_ordinary_pdbs_carry_no_address_map(rel):
     """None of the fixtures is BBT-processed, so nothing may change for them."""
