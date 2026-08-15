@@ -153,9 +153,16 @@ def _short_record(kind: int, payload_len: int = 0) -> bytes:
     return struct.pack("<HH", 2 + len(payload), kind) + payload
 
 
+# Every kind `parse_record` dispatches, so that re-narrowing that dispatch
+# fails here rather than silently dropping truncated records of the kinds it
+# stops covering. S_INLINESITE is absent because 12 bytes is a *whole* one --
+# three u32s and no annotations; tests/test_inline.py covers its short form.
 @pytest.mark.parametrize("kind", [
     codeview.S_PUB32, codeview.S_GPROC32, codeview.S_LPROC32,
     codeview.S_GDATA32, codeview.S_LDATA32,
+    codeview.S_PROCREF, codeview.S_LPROCREF, codeview.S_LABEL32,
+    codeview.S_THUNK32, codeview.S_TRAMPOLINE, codeview.S_CONSTANT,
+    codeview.S_UDT,
 ])
 @pytest.mark.parametrize("payload_len", [0, 4, 12])
 def test_a_record_too_short_for_its_kind_is_skipped_not_raised(kind, payload_len):
