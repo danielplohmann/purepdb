@@ -676,13 +676,36 @@ class PDB:
         return out
 
     def data_symbols(self) -> list[codeview.DataSymbol]:
-        """Global/static data symbols (S_GDATA32/S_LDATA32) across all modules,
-        plus any in the symbol-record stream."""
+        """Global and static data symbols (S_GDATA32/S_LDATA32), each once.
+
+        Two streams describe the same data. A module's own stream holds the
+        symbols defined in it, and the symbol-record stream holds the set the
+        globals hash indexes -- and a symbol in both is one symbol described
+        twice, not two. On sqlite3 x86 that is 633 records for 481 symbols.
+
+        A repeat is only dropped when it matches on name, segment, offset
+        *and* record kind: anything less would collapse two symbols that
+        genuinely share a name or an address into one, which is a wrong answer
+        rather than a tidier one. Nothing in the corpus disagrees on kind, so
+        nothing in it is kept by that last field alone.
+
+        Module order is preserved, and within it the order the records are in.
+        """
+        seen: set[tuple[str, int, int, int]] = set()
         out: list[codeview.DataSymbol] = []
+
+        def keep_new(symbols: list[codeview.DataSymbol]) -> None:
+            for sym in symbols:
+                key = (sym.name, sym.segment, sym.offset, sym.kind)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(sym)
+
         for mod in self.dbi.modules:
-            out.extend(codeview.extract_data(self.module_symbol_bytes(mod)))
-        if self.msf.is_valid_stream(self.dbi.symrecord_stream_index):
-            out.extend(codeview.extract_data(self.msf.read_stream(self.dbi.symrecord_stream_index)))
+            keep_new(codeview.extract_data(self.module_symbol_bytes(mod)))
+        idx = self.dbi.symrecord_stream_index
+        if self.msf.is_valid_stream(idx):
+            keep_new(codeview.extract_data(self.msf.read_stream(idx)))
         return out
 
     def _symbol_records(self) -> bytes:
