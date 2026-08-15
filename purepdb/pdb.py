@@ -202,6 +202,16 @@ class Diagnostics:
     are not entry points, so `labels()` rather than `functions()` is where they
     live. This counts records; a record too short to decode is counted here and
     in `malformed_records`, and `labels()` is one shorter."""
+    undecoded_constants: int = 0
+    """S_CONSTANT records whose value uses a numeric leaf purepdb does not
+    decode -- a float, say. They are not malformed, so `malformed_records` does
+    not cover them, but the name sits after the value, so an unknown value
+    length loses the name too and `constants()` is that much shorter."""
+    unplaced_inline_sites: int = 0
+    """S_INLINESITE records `inline_sites()` cannot report: their annotations
+    describe no code, or no open procedure encloses them, so there is no
+    address to give. `inline_sites` counts the records; this counts the ones
+    missing from the listing."""
 
     @property
     def truncated_streams(self) -> int:
@@ -315,6 +325,19 @@ class Diagnostics:
                 f"module streams hold {self.proc_records}; the {short} is short "
                 f"by {abs(self.proc_refs - self.proc_records)}. Both describe "
                 f"the same set, so one of them is being read incompletely"
+            )
+        if self.undecoded_constants:
+            out.append(
+                f"{self.undecoded_constants} constant(s) hold a value in a "
+                f"numeric leaf purepdb does not decode; their names sit after "
+                f"the value, so those records are missing from constants() "
+                f"entirely"
+            )
+        if self.unplaced_inline_sites:
+            out.append(
+                f"{self.unplaced_inline_sites} inline site(s) have no address "
+                f"to report: their annotations describe no code, or no open "
+                f"procedure encloses them, so inline_sites() leaves them out"
             )
         if self.line_bytes and not self.has_string_table:
             out.append(
@@ -838,10 +861,11 @@ class PDB:
                 truncations.append((f"module {mod.index} ({mod.module_name})", t))
 
         idx = self.dbi.symrecord_stream_index
-        proc_refs = 0
+        proc_refs = undecoded_constants = 0
         if self.msf.is_valid_stream(idx):
             symrecords = self.msf.read_stream(idx)
             malformed += codeview.count_malformed_records(symrecords)
+            undecoded_constants = codeview.count_undecoded_constants(symrecords)
             t = codeview.find_truncation(symrecords)
             if t is not None:
                 truncations.append(("the symbol-record stream", t))
@@ -866,6 +890,12 @@ class PDB:
             section_contributions=len(self._contributions),
             inline_sites=kinds.get(codeview.S_INLINESITE, 0),
             labels=kinds.get(codeview.S_LABEL32, 0),
+            undecoded_constants=undecoded_constants,
+            # The gap between the records and the listing, which is the only
+            # way a caller learns that a site was found and could not be
+            # placed. Decoding them costs 0.03s on the 3797-site fixture.
+            unplaced_inline_sites=(kinds.get(codeview.S_INLINESITE, 0)
+                                   - len(self.inline_sites())),
             proc_refs=proc_refs,
             line_bytes=line_bytes,
             has_string_table=self.string_table() is not None,

@@ -172,3 +172,21 @@ def test_a_wide_value_from_a_real_pdb_is_decoded():
 
     values = {c.value for c in PDB.open(str(path)).constants()}
     assert 0x8000_0000_0000_0000 in values
+
+
+def test_an_undecodable_constant_is_counted_and_explained():
+    """Skipping it silently is the failure this parser must not have.
+
+    It is not malformed -- the record is exactly what it claims to be -- so
+    `malformed_records` cannot cover it, and the name is lost with the value.
+    """
+    real64 = struct.pack("<Hd", 0x8006, 1.5)
+    data = constant("PI", 0, raw_value=real64) + constant("MAX", 7)
+    assert codeview.count_undecoded_constants(data) == 1
+
+    pdb = _pdb(data)
+    d = pdb.diagnose()
+    assert [c.name for c in pdb.constants()] == ["MAX"]
+    assert d.undecoded_constants == 1
+    assert d.malformed_records == 0, "the record is not short, only unreadable"
+    assert any("numeric leaf purepdb does not decode" in w for w in d.warnings)

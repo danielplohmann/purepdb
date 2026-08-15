@@ -514,6 +514,11 @@ def parse_record(kind: int, payload: bytes):
     dropped by the extractors and counted by nothing -- a symbol that vanishes
     with no diagnostic, which is the one failure this parser must not have.
 
+    That covers every record a parser rejects by *raising*. Two kinds can also
+    be dropped without an exception -- a constant whose numeric leaf we do not
+    decode, and an inline site whose annotations place no code -- which is what
+    `count_undecoded_constants` and `Diagnostics.unplaced_inline_sites` are for.
+
     Raises EOFError when the payload is shorter than the kind requires; see
     `decode_record` for the tolerant form the extractors use.
     """
@@ -664,6 +669,28 @@ def extract_constants(data: bytes) -> list[Constant]:
         if constant is not None:
             out.append(constant)
     return out
+
+
+def count_undecoded_constants(data: bytes) -> int:
+    """S_CONSTANT records whose value uses a numeric leaf we do not decode.
+
+    These are not malformed -- the record is exactly what it claims to be --
+    so `count_malformed_records` does not see them, and `parse_constant`
+    answers None rather than raising. But the name sits *after* the value, so
+    an unknown value length loses the name too: the record is dropped, and
+    without this nothing would say so. A `constexpr float` is the everyday
+    case; no fixture in the corpus has one.
+    """
+    total = 0
+    for rec in iter_records(data):
+        if rec.kind != S_CONSTANT:
+            continue
+        try:
+            if parse_constant(rec.payload) is None:
+                total += 1
+        except EOFError:
+            continue  # short for its kind, which `count_malformed_records` has
+    return total
 
 
 def extract_udts(data: bytes) -> list[UserDefinedType]:
