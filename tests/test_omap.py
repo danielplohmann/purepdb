@@ -421,7 +421,7 @@ def test_ordinary_pdbs_carry_no_address_map(rel):
     assert pdb.original_sections == []
 
 
-def _with_omap(data: bytes, delta: int) -> bytes:
+def _with_omap(data: bytes, delta: int, *, section_headers: bool = True) -> bytes:
     """A real PDB, re-serialised with an address map and an original section
     table added.
 
@@ -429,6 +429,10 @@ def _with_omap(data: bytes, delta: int) -> bytes:
     suggests exactly this as the practical substitute: synthetic tables inside
     a file that is otherwise real linker output, so the container, the DBI
     stream and every symbol record are the genuine article.
+
+    `section_headers=False` also clears slot 5, which is the shape in #39. The
+    real table is read out of `data` before the slot is cleared, so it is still
+    the file's own layout that lands in slot 10.
     """
     from purepdb.dbi import _HEADER
     from purepdb.msf import MsfFile
@@ -453,6 +457,8 @@ def _with_omap(data: bytes, delta: int) -> bytes:
             + header[13] + header[16])
     struct.pack_into("<H", dbi, base + 4 * 2, omap_index)
     struct.pack_into("<H", dbi, base + 10 * 2, orig_index)
+    if not section_headers:
+        struct.pack_into("<H", dbi, base + 5 * 2, 0xFFFF)
     streams[3] = bytes(dbi)
 
     return build_msf(streams)
@@ -483,3 +489,39 @@ def test_a_real_pdb_with_an_address_map_translates_every_function():
     assert after == {key: rva + delta for key, rva in before.items()
                      if rva is not None}
     assert translated.diagnose().omap_entries == 1
+
+
+def test_a_real_pdb_without_slot_5_reports_the_two_address_spaces():
+    """The same, with slot 5 taken away: #39 in a real container.
+
+    The synthetic cases above build the table shape from scratch; this one
+    reaches it from real linker output, so the divergence is measured between a
+    function's actual address and the file's actual section table rather than
+    between two tables of our own.
+    """
+    from pathlib import Path
+
+    path = (Path(__file__).resolve().parent / "data" / "rustpe"
+            / "rust_pe_symbols_msvc.pdb")
+    if not path.exists():
+        pytest.skip("groundtruth fixture missing: rustpe")
+    data = path.read_bytes()
+
+    delta = 0x0010_0000
+    original = PDB.from_bytes(data)
+    stripped = PDB.from_bytes(_with_omap(data, delta, section_headers=False))
+
+    # Every rva is final, and the only table left to show is the space the map
+    # translated out of -- a whole `delta` away from where the symbols are.
+    assert stripped.sections == []
+    assert stripped.derived_sections == []
+    assert stripped.original_sections == original.sections
+    before = {(f.segment, f.offset): f.rva for f in original.functions()}
+    assert before, "expected functions to translate"
+    assert {(f.segment, f.offset): f.rva for f in stripped.functions()} == \
+        {key: rva + delta for key, rva in before.items() if rva is not None}
+
+    d = stripped.diagnose()
+    assert (d.has_original_sections, d.omap_entries, d.has_section_headers) \
+        == (True, 1, False)
+    assert any("not comparable" in w for w in d.warnings), d.warnings
