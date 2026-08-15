@@ -24,8 +24,12 @@ from . import c13, codeview
 from .dbi import ContributionMap, DbiStream, ModuleInfo, SectionContribution
 from .gsi import PublicsStream
 from .ipi import IdTable
-from .msf import MsfFile, UnsupportedPdbError
-from .names import StringTable, parse_named_stream_map
+from .msf import MsfError, MsfFile, PdbError, UnsupportedPdbError
+from .names import (
+    NAMED_STREAM_MAP_OFFSET,
+    StringTable,
+    parse_named_stream_map,
+)
 from .omap import OmapTable
 from .sections import SectionTable, sections_from_map
 
@@ -182,6 +186,12 @@ class Diagnostics:
     """Byte offset where the ModuleInfo walk stopped, or None when it read the
     whole substream. Non-None means `modules` is short and the symbols in the
     modules never reached are missing."""
+    pdb_info_error: str | None = None
+    """Why the PDB Info stream could not be read, or None when it was.
+
+    The named-stream map lives in that stream, so when it is unreadable
+    `named_streams()` comes back empty and `string_table()` comes back None --
+    both silently, and both of which cost `lines()` its file names."""
 
     @property
     def truncated_streams(self) -> int:
@@ -302,6 +312,13 @@ class Diagnostics:
                 f"/names stream is not, so file-name offsets cannot be resolved "
                 f"and lines() yields nothing"
             )
+        if self.pdb_info_error is not None:
+            out.append(
+                f"the PDB Info stream cannot be read ({self.pdb_info_error}), "
+                f"so info() raises and the named-stream map in it is gone: "
+                f"named_streams() is empty and /names cannot be found, which "
+                f"is why a listing may have no file names"
+            )
         return out
 
 
@@ -342,24 +359,44 @@ class PDB:
     # -- metadata -----------------------------------------------------------
 
     # The fixed header of the PDB Info stream: version, signature, age, GUID.
-    PDB_INFO_HEADER_SIZE = 28
+    # The fixed header ends exactly where the named-stream map begins, so the
+    # two are one fact and are written down once.
+    PDB_INFO_HEADER_SIZE = NAMED_STREAM_MAP_OFFSET
+    GUID_OFFSET = 12
+
+    # VC70 is where the header grew the GUID this reads. Older streams put the
+    # named-stream map at offset 12, so the bytes at 12..28 are the map, not a
+    # GUID -- `llvm-pdbutil` refuses such a file outright rather than reporting
+    # one. Newer versions only append, so this is a floor and not a list.
+    PDB_INFO_VC70 = 20000404
 
     def info(self) -> PdbInfo:
         """Version, signature, age and GUID from the PDB Info stream.
 
-        Raises `UnsupportedPdbError` when that stream is shorter than the
-        header it must hold. The stream's length comes from the file, so this
-        is a bound the file can lie about, and reading past it would leak a
-        `struct.error` out of the public API.
+        Raises `MsfError` when that stream is shorter than the header it must
+        hold. The stream's length comes from the file, so this is a bound the
+        file can lie about: reading past it leaked a `struct.error` out of the
+        public API below 12 bytes, and between 12 and 27 returned a *short*
+        GUID -- a wrong answer, and the one a caller would key a symbol-server
+        lookup on.
+
+        Raises `UnsupportedPdbError` for a stream older than VC70, whose
+        layout carries no GUID at all.
         """
         data = self.msf.read_stream(STREAM_PDB_INFO)
         if len(data) < self.PDB_INFO_HEADER_SIZE:
-            raise UnsupportedPdbError(
+            raise MsfError(
                 f"the PDB Info stream is {len(data)} bytes, too short for the "
                 f"{self.PDB_INFO_HEADER_SIZE}-byte header"
             )
         version, signature, age = struct.unpack_from("<III", data, 0)
-        guid = data[12:28]
+        if version < self.PDB_INFO_VC70:
+            raise UnsupportedPdbError(
+                f"PDB Info stream version {version} predates VC70 "
+                f"({self.PDB_INFO_VC70}), whose header is the one this reads: "
+                f"there is no GUID in it to report"
+            )
+        guid = data[self.GUID_OFFSET:self.PDB_INFO_HEADER_SIZE]
         return PdbInfo(version=version, signature=signature, age=age, guid=guid)
 
     # -- sections -----------------------------------------------------------
@@ -787,6 +824,15 @@ class PDB:
 
     def diagnose(self) -> Diagnostics:
         """Summarise what this PDB actually contains. See `Diagnostics`."""
+        # Asked here so the answer is a warning rather than an exception: a
+        # caller reaches `diagnose()` precisely because something came back
+        # empty, and an unreadable Info stream is one reason `named_streams()`
+        # and `/names` do.
+        pdb_info_error: str | None = None
+        try:
+            self.info()
+        except PdbError as exc:
+            pdb_info_error = str(exc)
         kinds: dict[int, int] = {}
         with_symbols = 0
         truncations: list[tuple[str, codeview.Truncation]] = []
@@ -836,6 +882,7 @@ class PDB:
             proc_refs=proc_refs,
             line_bytes=line_bytes,
             has_string_table=self.string_table() is not None,
+            pdb_info_error=pdb_info_error,
             module_list_stopped_at=self.dbi.module_list_stopped_at,
         )
 

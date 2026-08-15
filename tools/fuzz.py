@@ -64,7 +64,6 @@ def exercise(data: bytes) -> list:
     """
     pdb = PDB.from_bytes(data)
     seen = [
-        pdb.info(),
         pdb.sections,
         pdb.derived_sections,
         pdb.original_sections,
@@ -84,6 +83,10 @@ def exercise(data: bytes) -> list:
         [pdb.resolve_proc_ref(ref) for ref in pdb.proc_refs()],
         list(pdb.lines()),
         pdb.diagnose().warnings,
+        # Last: this is the one call a short PDB Info stream
+        # rejects outright, and from the front of the list it
+        # ended the sweep before the other entry points ran.
+        pdb.info(),
     ]
     return seen
 
