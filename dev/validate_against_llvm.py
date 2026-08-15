@@ -47,10 +47,16 @@ comparison against it, all of them handled here:
   * a file heading is `path (MD5: ...)` or `path (no checksum)`; a line block
     is `line/addr entries` or `line/column/addr entries`.
 
-Anything in that output this script does not recognise raises `ParseError`
-rather than being skipped: a comparison that quietly drops records on the
-reference side reports agreement it never verified, which is worse than no
-comparison at all.
+A module heading, a section-contribution row or a line entry this script does
+not recognise raises `ParseError` rather than being skipped: mis-reading one of
+those silently reattributes or drops whole blocks of records.
+
+The record walk is not strict in the same way -- a line that is neither a
+module heading nor an `S_*` record header is treated as a continuation of the
+record above it, because that is what the multi-line record bodies are. So a
+change to the record header format does not raise; it empties that side of the
+comparison, which is caught instead by the rule that a check comparing nothing
+fails the run.
 """
 
 from __future__ import annotations
@@ -107,6 +113,11 @@ class Check:
 
 # --- running the reference implementation -----------------------------------
 
+# Generous: the slowest dump in the fixture corpus is `-l` on sqlite3 x86, at
+# well under a second. This is a hang guard, not a performance budget.
+DUMP_TIMEOUT = 600
+
+
 def dump(tool: str, path: Path, args: Iterable[str], cache: dict) -> str:
     """One `llvm-pdbutil dump` run, remembered -- `--symbols` feeds three of
     the checks.
@@ -116,22 +127,30 @@ def dump(tool: str, path: Path, args: Iterable[str], cache: dict) -> str:
     key = tuple(args)
     if key not in cache:
         try:
-            proc = subprocess.run([tool, "dump", *key, str(path)],
-                                  capture_output=True, text=True)
+            proc = subprocess.run(
+                [tool, "dump", *key, str(path)],
+                capture_output=True, timeout=DUMP_TIMEOUT,
+                # Not strict: llvm-pdbutil passes PDB name bytes through
+                # verbatim, and a localized build carries names that are not
+                # UTF-8. Decoding them strictly ended the sweep with a
+                # UnicodeDecodeError rather than reporting the file.
+                text=True, errors="replace")
         except OSError as exc:
             raise ParseError(f"could not run {tool!r}: {exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ParseError(
+                f"llvm-pdbutil {' '.join(key)} did not finish within "
+                f"{DUMP_TIMEOUT}s") from exc
         if proc.returncode != 0:
-            # Partial output from a failed run is still compared, because the
-            # records it did print are real -- but the failure is said out
-            # loud, or a truncated dump reads as purepdb inventing records.
+            # A reference run that failed did not establish anything, whether
+            # or not it printed something first: a truncated dump compared
+            # against a full listing reads as purepdb inventing records, and a
+            # crash that prints only its banner reads as agreement on nothing.
+            # Both used to be a printed note over a zero exit status.
             detail = proc.stderr.strip().splitlines()
             note = (detail[0][:200] if detail
                     else f"exit status {proc.returncode}")
-            if not proc.stdout:
-                raise ParseError(
-                    f"llvm-pdbutil {' '.join(key)} failed: {note}")
-            print(f"      note: llvm-pdbutil {' '.join(key)} exited "
-                  f"{proc.returncode}: {note}")
+            raise ParseError(f"llvm-pdbutil {' '.join(key)} failed: {note}")
         cache[key] = proc.stdout
     return cache[key]
 
@@ -419,7 +438,12 @@ _LINE_BLOCK = re.compile(r"^\s*(?P<segment>[0-9A-Fa-f]+):[0-9A-Fa-f]{8}-"
                          r"[0-9A-Fa-f]{8}, line(?:/column)?/addr entries = "
                          r"(?P<count>\d+)")
 # `NSI` where a line number would be, and the offset in hex.
-_LINE_ENTRY = re.compile(r"(?P<line>\d+|NSI)\s+(?P<offset>[0-9A-Fa-f]{8})")
+# The column, when the block header said `line/column/addr`, sits between the
+# line and the address as `line:column`. Without consuming it the column was
+# read *as* the line and the line became unmatched residual, so every file
+# built with column info -- which clang-cl emits by default -- failed the run.
+_LINE_ENTRY = re.compile(
+    r"(?P<line>\d+|NSI)(?::\d+)?\s+(?P<offset>[0-9A-Fa-f]{8})")
 
 
 def check_lines(pdb: PDB, text: str, streamless: set[int],
@@ -559,6 +583,14 @@ CHECKS = [
     Check("inline sites", ("--symbols",), check_inline_sites),
 ]
 
+# The two bound per file in `validate()`, named here so that "did every check
+# verify something?" can be asked without running one.
+LATE_CHECKS = ("module attribution", "lines")
+
+
+def check_names() -> list[str]:
+    return [check.name for check in CHECKS] + list(LATE_CHECKS)
+
 
 # --- reporting --------------------------------------------------------------
 
@@ -580,12 +612,20 @@ def differences(result: Result, limit: int) -> list[str]:
     return out
 
 
-def validate(path: Path, tool: str, limit: int) -> str:
-    """Compare one file: did it agree, disagree, or fail to open at all?"""
+def validate(path: Path, tool: str, limit: int, verified: set[str]) -> str:
+    """Compare one file: did it agree, disagree, or fail to open at all?
+
+    `verified` collects the checks that actually compared a record, so that a
+    corpus-wide run can say which of them established nothing.
+    """
     print(f"{path}")
     try:
         pdb = PDB.open(str(path))
-    except PdbError as exc:
+    except (PdbError, OSError) as exc:
+        # OSError as well as PdbError: a directory named *.pdb, a dangling
+        # symlink or an unreadable file used to end the whole sweep with a
+        # traceback, and `--allow-unreadable` -- whose entire purpose is
+        # sweeping a corpus that holds such files -- did not cover it.
         # Nothing was compared, so this is not agreement. On the fixture corpus
         # it is a regression in `PDB.open` or a damaged checkout, either of
         # which must fail the run; `--allow-unreadable` is for sweeping a
@@ -613,7 +653,17 @@ def validate(path: Path, tool: str, limit: int) -> str:
         for check in checks:
             result = check.compare(pdb, dump(tool, path, check.args, cache))
             diffs = differences(result, limit)
+            compared = max(len(result.ours), len(result.theirs))
+            if compared:
+                verified.add(check.name)
+            # Two empty lists agree, so a check with nothing on either side
+            # printed `ok` and was indistinguishable from one that verified
+            # thousands of records. It is not a failure per file -- rustpe32
+            # genuinely has no labels -- so it is tracked across the corpus
+            # and answered for at the end.
             status = "ok  " if not diffs else "FAIL"
+            if not diffs and not compared:
+                status = "----"
             print(f"  {status} {check.name:<20s} "
                   f"purepdb {len(result.ours)}, "
                   f"llvm-pdbutil {len(result.theirs)}")
@@ -650,6 +700,11 @@ def main() -> int:
     ap.add_argument("--max-diffs", type=int, default=10,
                     help="records to print per direction per check")
     args = ap.parse_args()
+    if args.max_diffs < 0:
+        # `-1` is the usual "unlimited" idiom, and it did the opposite: the
+        # overflow test is `len(records) > limit`, which an *empty* difference
+        # list satisfies, so every agreeing check reported FAIL.
+        ap.error("--max-diffs cannot be negative")
 
     # `which` already resolves an absolute or ./-relative path and rejects a
     # directory or a file without the executable bit, so it is the whole test.
@@ -672,7 +727,9 @@ def main() -> int:
         print(f"error: no PDBs found under {DEFAULT_CORPUS}", file=sys.stderr)
         return 1
 
-    outcomes = [(path, validate(path, tool, args.max_diffs)) for path in paths]
+    verified: set[str] = set()
+    outcomes = [(path, validate(path, tool, args.max_diffs, verified))
+                for path in paths]
     failed = [path for path, outcome in outcomes if outcome == "failed"]
     unreadable = [path for path, outcome in outcomes
                   if outcome == "unreadable"]
@@ -688,6 +745,25 @@ def main() -> int:
         for path in sorted(set(failed)):
             print(f"  {path}")
         return 1
+
+    # Checked before the per-check gate below, which would also fire here but
+    # would describe the symptom rather than the cause.
+    if len(unreadable) == len(paths):
+        print(f"FAIL: all {len(paths)} file(s) were unreadable, so nothing "
+              f"was compared")
+        return 1
+
+    # A check that compared no record on any file in the corpus verified
+    # nothing, and two empty lists agree -- so without this it printed `ok`
+    # and was indistinguishable from one that checked thousands. The same
+    # reasoning as the empty-corpus guard above, one level further down.
+    if unverified := [name for name in check_names() if name not in verified]:
+        print(f"FAIL: {len(unverified)} check(s) compared no record on any "
+              f"file, so they verified nothing:")
+        for name in unverified:
+            print(f"  {name}")
+        return 1
+
     print(f"ok: {len(paths) - len(unreadable)} file(s) agree with "
           f"llvm-pdbutil on every check{aside}")
     return 0
