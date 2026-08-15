@@ -107,6 +107,12 @@ def _pdb(*, procs=(), publics=(), original_sections=(), final_sections=(),
         dbg[5] = 6
     if omap is not None:
         dbg[4] = 8
+    # Slot 10 is named whenever an original table is supplied, and not only
+    # alongside a map. Tying the two together made `original_sections=` silently
+    # do nothing without `omap=`: the stream was written and never referenced,
+    # so the table a test asked for was invisible and the case it meant to build
+    # was not the case it got.
+    if original_sections:
         dbg[10] = 9
     streams = [
         b"",
@@ -268,12 +274,38 @@ def test_a_bbt_pdb_with_both_tables_is_not_warned_about():
 
 
 def test_no_address_space_warning_without_an_address_map():
-    """Slot 5 missing on an image that was never BBT-processed is a different
-    problem, and already has its own warning; this one must not also fire."""
+    """Slot 10 and no slot 5, but no map: a different problem with its own
+    warning, and this one must not also fire.
+
+    The state is asserted before the absence is, because an absence test whose
+    setup silently failed passes for the wrong reason -- which is exactly what
+    this test did while slot 10 was only ever named alongside a map.
+    """
     pdb = _pdb(procs=[gproc32("first", 1, 0x000)],
                original_sections=ORIGINAL, section_headers=False)
+    d = pdb.diagnose()
 
-    assert not any("not comparable" in w for w in pdb.diagnose().warnings)
+    assert (d.has_original_sections, d.omap_entries, d.has_section_headers) \
+        == (True, 0, False)
+    assert any("pre-optimisation address space" in w for w in d.warnings)
+    assert not any("not comparable" in w for w in d.warnings)
+
+
+def test_no_address_space_warning_without_the_pre_bbt_table():
+    """A map and no slot 5, but no slot 10 either.
+
+    Nothing was resolved against the pre-BBT table, so the map is not applied
+    and the addresses are not post-BBT -- there are no two spaces to confuse.
+    That case has its own warning; this one must not fire.
+    """
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)], omap=MOVED,
+               section_headers=False)
+    d = pdb.diagnose()
+
+    assert (d.has_original_sections, d.omap_entries, d.has_section_headers) \
+        == (False, 2, False)
+    assert any("slot 10" in w and "not applied" in w for w in d.warnings)
+    assert not any("not comparable" in w for w in d.warnings)
 
 
 def test_original_sections_without_an_address_map_are_warned_about():
