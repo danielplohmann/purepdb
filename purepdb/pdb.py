@@ -273,6 +273,20 @@ class Diagnostics:
                 "translate out of; addresses are reported as the section "
                 "headers give them and the map is not applied"
             )
+        if (self.omap_entries and self.has_original_sections
+                and not self.has_section_headers):
+            # Both facts are already reported on their own; nothing joined them,
+            # and separately neither looks like a problem.
+            out.append(
+                "this image was processed after linking and has no "
+                "section-header stream (Optional Debug Header slot 5): every "
+                "rva reported is a final, post-BBT address translated through "
+                "the map, but the only section table left to show is the "
+                "pre-BBT one in slot 10, which is the space the map "
+                "translates out of. The two are not comparable -- asking "
+                "which section contains a symbol by pairing its rva with that "
+                "table gives the wrong answer"
+            )
         if self.has_original_sections and not self.omap_entries:
             out.append(
                 "this image was processed after linking (Optional Debug Header "
