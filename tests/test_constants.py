@@ -144,7 +144,7 @@ def test_a_pdb_with_no_symbol_record_stream_answers_empty():
     pytest.param("sqlite/x64/sqlite3.pdb", 295, 287, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 33, 81, id="rustpe-msvc"),
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 9, 32, id="rustpe-i686"),
-    pytest.param("tls/tls_symbols.pdb", 0, 0, id="tls-x64"),
+    pytest.param("tls/tls_symbols.pdb", 2, 1, id="tls-x64"),
 ])
 def test_real_counts_are_stable(rel, n_constants, n_udts):
     from pathlib import Path

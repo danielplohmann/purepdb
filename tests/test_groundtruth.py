@@ -45,7 +45,7 @@ CASES = [
                  "rustpe32/rust_pe_symbols_i686.exe",
                  0x014C, 2, 2, 5, 6, 1, id="rustpe-i686"),
     pytest.param("tls/tls_symbols.pdb", "tls/tls_symbols.exe",
-                 0x8664, 5, 2, 10, 2, 0, id="tls-x64"),
+                 0x8664, 6, 2, 10, 2, 0, id="tls-x64"),
 ]
 
 

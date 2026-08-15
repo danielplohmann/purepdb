@@ -290,7 +290,7 @@ def test_real_pdbs_keep_every_address_without_the_section_headers(rel):
     pytest.param("sqlite/x64/sqlite3.pdb", 10, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 8, id="rustpe-msvc"),
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 3, id="rustpe-i686"),
-    pytest.param("tls/tls_symbols.pdb", 6, id="tls-x64"),
+    pytest.param("tls/tls_symbols.pdb", 7, id="tls-x64"),
 ])
 def test_the_rebuild_reproduces_the_real_section_table(rel, n_entries):
     """The evidence for the fallback, taken from files that do not need it.
