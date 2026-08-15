@@ -82,16 +82,31 @@ The shapes that once needed a fixture, and the one still open:
   shape no test here has seen. See issue #25: fetching one at test time belongs
   in `dev/`, beside the llvm-pdbutil cross-check, rather than in this directory.
 
-  Two things worth recording for whoever tries to close that gap. A vendor
-  symbol-server PDB is not eligible here whatever it would prove: it is neither
-  our own build nor public-domain material. And the one open-source tool that
-  writes OMAP — Google's Syzygy `relink`, archived but Apache 2.0, with
-  relinked output committed in its own tree — writes slots 3 and 4 only, never
-  slot 10. Measured on `refinery/test_data/test_vtables_omap.dll.pdb`: 1228
-  OMAP entries, no original section table, and purepdb reads it with no
-  malformed records. So that file would be a real test of OMAP *parsing*, and
-  still not of the slot-10 branch, which is the one that changes an address.
-  Nothing public appears to write slot 10.
+### On finding a slot-10 fixture
+
+Recorded so the next person does not repeat the search. Two questions, and
+running them together is what makes this look easier than it is: whether such
+a file can be **obtained**, and whether it can be **committed here**.
+
+Obtaining one is not the problem. Microsoft's symbol server serves
+BBT-processed PDBs that carry slot 10 — an XP-era `ntdll.pdb` has 37118 OMAP
+entries and an original section table, and purepdb reads it today. Committing
+one is the problem: it is neither our own build nor public-domain material,
+which is what the rule at the end of this file asks for, so a vendor
+symbol-server PDB is not eligible here whatever it would prove.
+
+That leaves producing one. The only open-source tool that writes OMAP is
+Google's Syzygy `relink` — archived July 2023, Apache 2.0, with relinked
+output committed in its own tree under an explicit redistribution grant. That
+output *is* redistributable, so it is a real candidate for the corpus. It does
+not close this gap: Syzygy writes slots 3 and 4 and never slot 10. Measured on
+`syzygy/refinery/test_data/test_vtables_omap.dll.pdb`, purepdb reports 1228
+OMAP entries, no original section table, no malformed records and no
+truncations — a real test of OMAP *parsing*, and no test at all of the slot-10
+branch, which is the branch that changes an address.
+
+So the slot-10 branch stays synthetic until a redistributable producer writes
+slot 10, or the shape is built by hand.
 
 Keep fixtures small, keep them own builds or public-domain sources, and record
 the toolchain here — a fixture whose provenance is unclear cannot stay in a
