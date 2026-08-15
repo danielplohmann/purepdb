@@ -1,0 +1,52 @@
+name: Cross-check against llvm-pdbutil
+
+# Deliberately not on pull requests. The reference implementation is a moving
+# target: a runner-image LLVM bump changing one record's formatting would turn
+# an unrelated PR red, which is the same reasoning behind pinning the dev
+# dependency group. This runs nightly, and on demand.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  crosscheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # The runner image ships LLVM, but not always with its bin directory on
+      # PATH, and `llvm-pdbutil` is one of the tools that is only there.
+      # Installing is the fallback, not the first move.
+      - name: Locate llvm-pdbutil
+        run: |
+          TOOL="$(command -v llvm-pdbutil || true)"
+          if [ -z "$TOOL" ]; then
+            TOOL="$(ls -1 /usr/lib/llvm-*/bin/llvm-pdbutil 2>/dev/null | tail -1)"
+          fi
+          if [ -z "$TOOL" ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends llvm
+            TOOL="$(command -v llvm-pdbutil || true)"
+            if [ -z "$TOOL" ]; then
+              TOOL="$(ls -1 /usr/lib/llvm-*/bin/llvm-pdbutil 2>/dev/null | tail -1)"
+            fi
+          fi
+          echo "LLVM_PDBUTIL=$TOOL" >> "$GITHUB_ENV"
+          "$TOOL" --version
+      # --require-tool so a runner image that stops shipping llvm-pdbutil fails
+      # here rather than passing on a skip that verified nothing.
+      - name: Cross-check every fixture
+        run: python dev/validate_against_llvm.py --require-tool

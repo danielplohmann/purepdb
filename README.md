@@ -273,6 +273,19 @@ is a maintainer decision rather than something a workflow should assume.
 installing purepdb does not pull down 12 MB of binaries. Those tests skip when
 the data is absent — clone the repo to run them.
 
-The suite needs no external tool. Results are also cross-checked
-record-by-record against `llvm-pdbutil` during development, where that toolchain
-is available.
+The suite needs no external tool. The cross-check against the reference
+implementation therefore lives outside it, in `dev/validate_against_llvm.py`:
+
+```bash
+python dev/validate_against_llvm.py                  # tests/data/**/*.pdb
+python dev/validate_against_llvm.py path/to/one.pdb   # or a private corpus
+```
+
+It compares purepdb against `llvm-pdbutil` **record by record**, not by total:
+procedures, publics, constants, UDTs, the section-contribution table and the
+module each function is attributed to through it, every `file:line` entry, and
+every inlined body with all of its code ranges. It exits non-zero on any
+disagreement, printing the records that differ, and skips with a message when
+`llvm-pdbutil` is not installed, so running it is never a requirement. A
+nightly GitHub Actions job runs it with `--require-tool`, which turns a missing
+toolchain into a failure rather than a silent pass.
