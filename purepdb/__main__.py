@@ -10,10 +10,12 @@ A name can hold anything, including spaces -- `std::rt::lang_start::closure$0
 <tuple$<> >` is one name -- so **the name is the last field on its line**, and
 nothing is printed after it. The one line that carries two names, an inline
 site and the function it was inlined into, separates them with a tab, which a
-name cannot contain because control characters are escaped: a name holding a
-newline would otherwise put a record on two lines, and one holding an escape
-sequence would drive the terminal. Names are otherwise printed exactly as the
-PDB stores them -- decorated, mangled, or empty.
+name cannot contain because every unprintable character in one is escaped: a
+name holding a newline would otherwise put a record on two lines, and one
+holding an escape sequence would drive the terminal. A backslash is left
+alone, so `a\x0ab` on screen is either of two names -- readable paths are
+worth more here than a mapping that can be inverted. Names are otherwise
+printed exactly as the PDB stores them -- decorated, mangled, or empty.
 
 An address the PDB cannot resolve prints as `??????` rather than as a number
 that would be wrong.
@@ -88,7 +90,9 @@ def _warn(pdb: PDB) -> None:
     that drifts out of step with `Diagnostics.warnings`.
     """
     for w in pdb.diagnose().warnings:
-        print(f"WARNING: {w}", file=sys.stderr)
+        # Escaped like a listing: a warning quotes the module name it found
+        # the damage in, and that name comes out of the file.
+        print(f"WARNING: {_text(w)}", file=sys.stderr)
 
 
 def _info(pdb: PDB) -> None:
@@ -126,7 +130,7 @@ def _diagnose(pdb: PDB) -> None:
     for kind, count in sorted(d.module_kinds.items(), key=lambda kv: -kv[1]):
         print(f"  {codeview.kind_name(kind):<16s} {count}")
     for w in d.warnings:
-        print(f"\nWARNING: {w}")
+        print(f"\nWARNING: {_text(w)}")
 
 
 def _functions(pdb: PDB) -> int:
@@ -323,26 +327,32 @@ def main(argv: list[str]) -> int:
         # did, so the warning step can raise on a file the listing survived.
         # These are expected on a directory of real binaries: report the
         # reason, don't hand the user a traceback.
-        print(f"error: {path}: {exc}", file=sys.stderr)
+        print(f"error: {path}: {_text(str(exc))}", file=sys.stderr)
         return 1
     except BrokenPipeError:
         # Before OSError, which it is a subclass of. `| head` closes the pipe
         # under us: not an error, and the shell would have reported 141 for
         # the SIGPIPE this stands in for.
-        _silence_broken_pipe()
+        _stop_writing_to_stdout()
         return 141
     except OSError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        # Same reason as above: stdout can be unwritable from the start --
+        # `purepdb labels x.pdb >&-` closes it -- and then the exit-time flush
+        # fails too, turning a reported error into status 120 and a second
+        # message from the interpreter.
+        _stop_writing_to_stdout()
+        print(f"error: {_text(str(exc))}", file=sys.stderr)
         return 1
     return 0
 
 
-def _silence_broken_pipe() -> None:
+def _stop_writing_to_stdout() -> None:
     """Keep the interpreter from raising again on the way out.
 
-    Python flushes stdout at exit, which on a closed pipe raises a second time
-    and prints a traceback nothing caught. Pointing the descriptor at the null
-    device is the remedy the standard library documents.
+    Python flushes stdout at exit, which on a stream that cannot be written --
+    a closed pipe, a closed descriptor -- raises a second time and prints a
+    message nothing caught. Pointing the descriptor at the null device is the
+    remedy the standard library documents.
     """
     # Suppressed rather than handled: stdout may not be a real file at all --
     # a test's capture buffer has no descriptor -- and then there is nothing
@@ -367,10 +377,25 @@ def cli() -> int:
             with contextlib.suppress(OSError, ValueError):
                 reconfigure(errors="backslashreplace")
     try:
-        return main(sys.argv)
+        status = main(sys.argv)
+        # The flush belongs here, not to the interpreter's exit. A listing
+        # small enough to sit in the stdio buffer performs no write at all
+        # while `main()` is running, so `| head` or any reader that leaves
+        # early is discovered only on the way out -- where nothing catches it,
+        # and the user gets a message from the interpreter and status 120
+        # instead of the 141 that says the pipe closed.
+        sys.stdout.flush()
+        return status
     except KeyboardInterrupt:
         print(file=sys.stderr)  # finish the line the listing was on
         return 130
+    except BrokenPipeError:
+        _stop_writing_to_stdout()
+        return 141
+    except OSError as exc:
+        _stop_writing_to_stdout()
+        print(f"error: {_text(str(exc))}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
