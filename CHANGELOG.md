@@ -14,7 +14,15 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `PDB.data_symbols()` reports each symbol once. A module's stream and the
+  symbol-record stream both describe a file-static symbol, and the globals
+  stream repeats a few of its own, so the listing counted 633 records as 633
+  symbols on sqlite3 x86 where the file describes 481. A record is dropped
+  only when name, segment, offset *and* kind all repeat; the surviving set is
+  identical to what `llvm-pdbutil` prints across `dump --symbols` and
+  `dump --globals`, deduplicated the same way.
 
 ## [0.3.0] - 2026-08-14
 
