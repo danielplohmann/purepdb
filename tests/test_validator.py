@@ -19,6 +19,13 @@ import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "dev" / "validate_against_llvm.py"
 
+# The llvm-pdbutil stand-ins below are shell scripts, which Windows cannot
+# execute. The script under test is a developer and nightly-CI tool that runs
+# on POSIX; the tests that need no subprocess still run everywhere.
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the llvm-pdbutil stand-ins are shell scripts")
+
 
 @pytest.fixture(scope="module")
 def validator():
@@ -38,6 +45,7 @@ def validator():
     return module
 
 
+@posix_only
 def test_a_failed_reference_run_is_not_a_note(validator, tmp_path):
     """A dump that exited non-zero established nothing, whether or not it
     printed something first. Partial output compared against a full listing
@@ -53,6 +61,7 @@ def test_a_failed_reference_run_is_not_a_note(validator, tmp_path):
         validator.dump(str(tool), tmp_path / "x.pdb", ("--symbols",), {})
 
 
+@posix_only
 def test_a_reference_run_that_hangs_is_bounded(validator, tmp_path):
     tool = tmp_path / "hanging-pdbutil"
     tool.write_text("#!/bin/sh\nsleep 30\n")
@@ -67,6 +76,7 @@ def test_a_reference_run_that_hangs_is_bounded(validator, tmp_path):
         validator.DUMP_TIMEOUT = original
 
 
+@posix_only
 def test_output_that_is_not_utf8_is_read_rather_than_raising(validator,
                                                              tmp_path):
     """llvm-pdbutil passes PDB name bytes through verbatim, so a localized
@@ -140,6 +150,7 @@ def test_a_corpus_with_no_pdbs_in_it_fails(validator, tmp_path, stub_tool,
     assert validator.main() == 1
 
 
+@posix_only
 def test_an_unreadable_file_is_reported_not_a_traceback(tmp_path, stub_tool):
     """A directory named *.pdb, a dangling symlink or an unreadable file
     raises OSError rather than PdbError, which ended the sweep with a
@@ -158,6 +169,7 @@ def test_an_unreadable_file_is_reported_not_a_traceback(tmp_path, stub_tool):
     assert "all 1 file(s) were unreadable" in proc.stdout
 
 
+@posix_only
 def test_a_check_that_compared_nothing_fails_the_run(validator, tmp_path,
                                                      monkeypatch):
     """Two empty lists agree, so a check with no records on either side used
