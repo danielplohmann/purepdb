@@ -176,7 +176,7 @@ def _data(pdb: PDB) -> int:
     for d in symbols:
         scope = "global" if d.is_global else "static"
         print(f"{_rva(pdb.to_rva(d.segment, d.offset))}  {scope:7s}  "
-              f"{_text(d.name)}")
+              f"{_text(d.name) or NO_NAME}")
     return len(symbols)
 
 
@@ -211,7 +211,7 @@ def _thunks(pdb: PDB) -> int:
     thunks = pdb.thunks()
     for t in thunks:
         print(f"{_rva(pdb.to_rva(t.segment, t.offset))}  size={t.length:<8x} "
-              f"{t.ordinal_name:<10s}  {_text(t.name)}")
+              f"{t.ordinal_name:<18s}  {_text(t.name)}")
     return len(thunks)
 
 
@@ -252,7 +252,7 @@ def _constants(pdb: PDB) -> int:
 def _udts(pdb: PDB) -> int:
     udts = pdb.udts()
     for u in udts:
-        print(f"{u.type_index:#x}  {_text(u.name)}")
+        print(f"{u.type_index:<#10x}  {_text(u.name)}")
     return len(udts)
 
 

@@ -227,13 +227,17 @@ class ProcRef:
 
 # THUNK_ORDINAL values, the tag for the variant data after a thunk's name.
 THUNK_NOTYPE = 0
+# 4 is THUNK_ORDINAL_LOAD and 5 and 6 are the two *trampoline* ordinals, which
+# is what `llvm-pdbutil` calls "unknown load", "tramp incremental" and "branch
+# island". They were named after delay-loading, which no ordinal means.
 THUNK_ORDINAL_NAMES = {
     THUNK_NOTYPE: "notype",
     1: "adjustor",
     2: "vcall",
     3: "pcode",
-    4: "delay-load",
-    5: "delay-load-incremental",
+    4: "load",
+    5: "tramp-incremental",
+    6: "tramp-branchisland",
 }
 
 # TRAMP_* values: which flavour of compiler-generated jump this is.
