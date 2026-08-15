@@ -138,6 +138,38 @@ def test_same_named_statics_at_different_addresses_are_both_kept():
     assert [t.template_rva for t in pdb.thread_locals()] == [0x4010, 0x4020]
 
 
+def test_the_same_name_and_address_in_two_linkages_are_both_kept():
+    """The `kind` component of the key.
+
+    `_Thread_local int counter;` in one object and a `static` one at the same
+    address in another are two symbols, and the record kind is the only field
+    that separates them. Nothing in the corpus has this shape, so it is
+    synthetic or it is untested -- and dropping `kind` from the key otherwise
+    passes the whole suite.
+    """
+    pdb = _pdb(thread32("counter", 2, 0x10, kind=codeview.S_LTHREAD32)
+               + thread32("counter", 2, 0x10, kind=codeview.S_GTHREAD32))
+    found = pdb.thread_locals()
+
+    assert len(found) == 2
+    assert sorted(t.is_global for t in found) == [False, True]
+
+
+def test_one_name_at_one_offset_in_two_segments_is_two_symbols():
+    """The `segment` component of the key.
+
+    An offset is section-relative, so name and offset alone do not identify a
+    symbol. These two resolve to different addresses, which is the point --
+    collapsing them would drop a variable that exists.
+    """
+    pdb = _pdb(thread32("counter", 1, 0x10, kind=codeview.S_LTHREAD32)
+               + thread32("counter", 2, 0x10, kind=codeview.S_LTHREAD32))
+    found = pdb.thread_locals()
+
+    assert len(found) == 2
+    assert sorted(t.template_rva or 0 for t in found) == [0x1010, 0x4010]
+
+
 def test_the_diagnostic_explains_a_data_listing_that_omits_them():
     pdb = _pdb(thread32("tls_counter", 2, 0x10))
     d = pdb.diagnose()
