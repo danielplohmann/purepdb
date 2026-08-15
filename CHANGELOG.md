@@ -14,7 +14,13 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- A `diagnose()` warning for a BBT-processed PDB that carries the pre-BBT
+  section table (Optional Debug Header slot 10) and no section headers (slot 5).
+  Symbol RVAs are final, post-BBT addresses, while the only section table left
+  to display is the pre-BBT one the map translates out of — two address spaces,
+  both looking like RVAs, with nothing previously marking the mismatch.
 
 ## [0.3.0] - 2026-08-14
 

@@ -90,17 +90,29 @@ def test_an_unsorted_table_is_still_answered_correctly():
 # --- end to end -------------------------------------------------------------
 
 def _pdb(*, procs=(), publics=(), original_sections=(), final_sections=(),
-         omap=None):
-    """A PDB whose symbols are addressed against `original_sections`."""
+         omap=None, section_headers=True):
+    """A PDB whose symbols are addressed against `original_sections`.
+
+    `section_headers=False` leaves slot 5 unnamed, which is the shape a
+    BBT-processed PDB has when the only section table it carries is the
+    pre-BBT one.
+    """
     module_records = b"".join(procs)
     symrecords = b"".join(publics)
     module_syms = module_sym_stream(module_records)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
                        sym_byte_size=len(module_syms))
     dbg = [0xFFFF] * 11
-    dbg[5] = 6
+    if section_headers:
+        dbg[5] = 6
     if omap is not None:
         dbg[4] = 8
+    # Slot 10 is named whenever an original table is supplied, and not only
+    # alongside a map. Tying the two together made `original_sections=` silently
+    # do nothing without `omap=`: the stream was written and never referenced,
+    # so the table a test asked for was invisible and the case it meant to build
+    # was not the case it got.
+    if original_sections:
         dbg[10] = 9
     streams = [
         b"",
@@ -225,6 +237,77 @@ def test_diagnose_reports_the_address_map():
     assert d.warnings == []
 
 
+def test_a_bbt_pdb_without_slot_5_reports_the_two_address_spaces():
+    """Slot 10 and the map present, slot 5 absent: the divergence in #39.
+
+    Symbols resolve against the pre-BBT table and are then translated, so every
+    rva is final. `sections` is slot 5 alone and comes back empty, which leaves
+    `original_sections` as the only table a caller can display -- and that one
+    is the space the map translates *out of*. Both numbers look like RVAs and
+    nothing marked the mismatch.
+    """
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)],
+               original_sections=ORIGINAL, final_sections=FINAL, omap=MOVED,
+               section_headers=False)
+
+    # The two answers really are in different spaces: the function ships at
+    # 0x8100, and the only visible section table still says .text is at 0x1000.
+    assert pdb.functions()[0].rva == 0x8100
+    assert pdb.sections == []
+    assert pdb.original_sections[0].virtual_address == 0x1000
+
+    d = pdb.diagnose()
+    assert d.omap_entries == 2
+    assert d.has_original_sections
+    assert not d.has_section_headers
+    assert any("not comparable" in w for w in d.warnings), d.warnings
+
+
+def test_a_bbt_pdb_with_both_tables_is_not_warned_about():
+    """The ordinary BBT shape, which is fine: symbols resolve through slot 10
+    plus the map and `sections` returns slot 5, both final addresses."""
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)],
+               original_sections=ORIGINAL, final_sections=FINAL, omap=MOVED)
+
+    assert pdb.sections[0].virtual_address == 0x8000
+    assert not any("not comparable" in w for w in pdb.diagnose().warnings)
+
+
+def test_no_address_space_warning_without_an_address_map():
+    """Slot 10 and no slot 5, but no map: a different problem with its own
+    warning, and this one must not also fire.
+
+    The state is asserted before the absence is, because an absence test whose
+    setup silently failed passes for the wrong reason -- which is exactly what
+    this test did while slot 10 was only ever named alongside a map.
+    """
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)],
+               original_sections=ORIGINAL, section_headers=False)
+    d = pdb.diagnose()
+
+    assert (d.has_original_sections, d.omap_entries, d.has_section_headers) \
+        == (True, 0, False)
+    assert any("pre-optimisation address space" in w for w in d.warnings)
+    assert not any("not comparable" in w for w in d.warnings)
+
+
+def test_no_address_space_warning_without_the_pre_bbt_table():
+    """A map and no slot 5, but no slot 10 either.
+
+    Nothing was resolved against the pre-BBT table, so the map is not applied
+    and the addresses are not post-BBT -- there are no two spaces to confuse.
+    That case has its own warning; this one must not fire.
+    """
+    pdb = _pdb(procs=[gproc32("first", 1, 0x000)], omap=MOVED,
+               section_headers=False)
+    d = pdb.diagnose()
+
+    assert (d.has_original_sections, d.omap_entries, d.has_section_headers) \
+        == (False, 2, False)
+    assert any("slot 10" in w and "not applied" in w for w in d.warnings)
+    assert not any("not comparable" in w for w in d.warnings)
+
+
 def test_original_sections_without_an_address_map_are_warned_about():
     """Slot 10 present, slot 4 missing: the rvas cannot be trusted, so say so."""
     module_syms = module_sym_stream(gproc32("first", 1, 0x000))
@@ -338,7 +421,7 @@ def test_ordinary_pdbs_carry_no_address_map(rel):
     assert pdb.original_sections == []
 
 
-def _with_omap(data: bytes, delta: int) -> bytes:
+def _with_omap(data: bytes, delta: int, *, section_headers: bool = True) -> bytes:
     """A real PDB, re-serialised with an address map and an original section
     table added.
 
@@ -346,6 +429,10 @@ def _with_omap(data: bytes, delta: int) -> bytes:
     suggests exactly this as the practical substitute: synthetic tables inside
     a file that is otherwise real linker output, so the container, the DBI
     stream and every symbol record are the genuine article.
+
+    `section_headers=False` also clears slot 5, which is the shape in #39. The
+    real table is read out of `data` before the slot is cleared, so it is still
+    the file's own layout that lands in slot 10.
     """
     from purepdb.dbi import _HEADER
     from purepdb.msf import MsfFile
@@ -370,6 +457,8 @@ def _with_omap(data: bytes, delta: int) -> bytes:
             + header[13] + header[16])
     struct.pack_into("<H", dbi, base + 4 * 2, omap_index)
     struct.pack_into("<H", dbi, base + 10 * 2, orig_index)
+    if not section_headers:
+        struct.pack_into("<H", dbi, base + 5 * 2, 0xFFFF)
     streams[3] = bytes(dbi)
 
     return build_msf(streams)
@@ -400,3 +489,39 @@ def test_a_real_pdb_with_an_address_map_translates_every_function():
     assert after == {key: rva + delta for key, rva in before.items()
                      if rva is not None}
     assert translated.diagnose().omap_entries == 1
+
+
+def test_a_real_pdb_without_slot_5_reports_the_two_address_spaces():
+    """The same, with slot 5 taken away: #39 in a real container.
+
+    The synthetic cases above build the table shape from scratch; this one
+    reaches it from real linker output, so the divergence is measured between a
+    function's actual address and the file's actual section table rather than
+    between two tables of our own.
+    """
+    from pathlib import Path
+
+    path = (Path(__file__).resolve().parent / "data" / "rustpe"
+            / "rust_pe_symbols_msvc.pdb")
+    if not path.exists():
+        pytest.skip("groundtruth fixture missing: rustpe")
+    data = path.read_bytes()
+
+    delta = 0x0010_0000
+    original = PDB.from_bytes(data)
+    stripped = PDB.from_bytes(_with_omap(data, delta, section_headers=False))
+
+    # Every rva is final, and the only table left to show is the space the map
+    # translated out of -- a whole `delta` away from where the symbols are.
+    assert stripped.sections == []
+    assert stripped.derived_sections == []
+    assert stripped.original_sections == original.sections
+    before = {(f.segment, f.offset): f.rva for f in original.functions()}
+    assert before, "expected functions to translate"
+    assert {(f.segment, f.offset): f.rva for f in stripped.functions()} == \
+        {key: rva + delta for key, rva in before.items() if rva is not None}
+
+    d = stripped.diagnose()
+    assert (d.has_original_sections, d.omap_entries, d.has_section_headers) \
+        == (True, 1, False)
+    assert any("not comparable" in w for w in d.warnings), d.warnings
