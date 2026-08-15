@@ -85,6 +85,7 @@ def main(argv: list[str]) -> int:
               f"({d.proc_refs} in the globals index)")
         print(f"public records     : {d.public_records}")
         print(f"inline sites       : {d.inline_sites}")
+        print(f"labels             : {d.labels}")
         print(f"line info          : {d.line_bytes} bytes"
               f"{'' if d.has_string_table else ', /names MISSING'}")
         print(f"section headers    : {'yes' if d.has_section_headers else 'NO'}")

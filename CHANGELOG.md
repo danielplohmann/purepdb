@@ -14,7 +14,13 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `S_LABEL32` decoding: named code addresses inside procedures — assembly
+  labels, exception continuation targets, interrupt-return points. `PDB.labels()`,
+  `Label`, `codeview.LabelSymbol`, and `Diagnostics.labels`. They are
+  deliberately *not* merged into `functions()`, because a label is an address
+  within a body that already has an entry point.
 
 ## [0.3.0] - 2026-08-14
 

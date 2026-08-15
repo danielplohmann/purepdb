@@ -120,6 +120,21 @@ class InlineFunction:
 
 
 @dataclass
+class Label:
+    """A named code address inside a function, from an `S_LABEL32` record.
+
+    A label is somewhere to jump to within a body that already has an entry
+    point, so it is not a `Function` and does not appear in `functions()`.
+    """
+
+    name: str
+    segment: int
+    offset: int
+    rva: int | None
+    flags: int  # CV_PROCFLAGS, as the record carries it
+
+
+@dataclass
 class PdbInfo:
     version: int
     signature: int
@@ -166,6 +181,9 @@ class Diagnostics:
     inline_sites: int = 0
     """Inlined bodies found in the module streams. They have no entry point and
     so never reach `functions()`; `inline_sites()` is where they live."""
+    labels: int = 0
+    """Named code addresses (S_LABEL32) in the module streams. Like inline
+    sites they are not entry points, so `labels()` is where they live."""
     proc_refs: int = 0
     """S_PROCREF/S_LPROCREF records: the globals' index of every procedure.
 
@@ -607,6 +625,28 @@ class PDB:
             out.extend(codeview.extract_trampolines(self.module_symbol_bytes(mod)))
         return out
 
+    def labels(self) -> list[Label]:
+        """Named code addresses (S_LABEL32) across all module streams.
+
+        Deliberately not part of `functions()`, for the same reason trampolines
+        are not: a label sits *inside* a procedure, so listing it as a function
+        would count one body twice and put an address in the function list that
+        nothing calls. What it does give is a name for the addresses a
+        disassembler most wants named -- interrupt-return points, exception
+        continuation targets, the entry a hand-written stub jumps back to.
+        """
+        out: list[Label] = []
+        for mod in self.dbi.modules:
+            for label in codeview.extract_labels(self.module_symbol_bytes(mod)):
+                out.append(Label(
+                    name=label.name,
+                    segment=label.segment,
+                    offset=label.offset,
+                    rva=self.to_rva(label.segment, label.offset),
+                    flags=label.flags,
+                ))
+        return out
+
     def id_table(self) -> IdTable | None:
         """The IPI stream's item id -> name map, or None when there is none."""
         if isinstance(self._id_table, _Unread):
@@ -818,6 +858,7 @@ class PDB:
             has_original_sections=self._original_sections is not None,
             section_contributions=len(self._contributions),
             inline_sites=kinds.get(codeview.S_INLINESITE, 0),
+            labels=kinds.get(codeview.S_LABEL32, 0),
             proc_refs=proc_refs,
             line_bytes=line_bytes,
             has_string_table=self.string_table() is not None,

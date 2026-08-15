@@ -256,6 +256,21 @@ class ThunkSymbol:
 
 
 @dataclass
+class LabelSymbol:
+    """S_LABEL32: a named code address inside a procedure.
+
+    An assembly label, an exception continuation target, an interrupt-return
+    point -- code with a name but not an entry point, which is why these are
+    reported separately from functions rather than merged into them.
+    """
+
+    name: str
+    segment: int   # 1-based section index
+    offset: int    # offset within the section
+    flags: int     # CV_PROCFLAGS, the same byte S_*PROC32 carries
+
+
+@dataclass
 class Trampoline:
     """An incremental-link jump stub. Unlike a thunk it carries no name.
 
@@ -658,6 +673,15 @@ def parse_thunk(payload: bytes) -> ThunkSymbol:
                        length=length, ordinal=ordinal)
 
 
+def parse_label(payload: bytes) -> LabelSymbol:
+    r = Reader(payload)
+    offset = r.u32()
+    segment = r.u16()
+    flags = r.u8()
+    return LabelSymbol(name=r.cstring(), segment=segment, offset=offset,
+                       flags=flags)
+
+
 def parse_trampoline(payload: bytes) -> Trampoline:
     r = Reader(payload)
     kind = r.u16()
@@ -693,6 +717,13 @@ def extract_thunks(data: bytes) -> list[ThunkSymbol]:
 def extract_trampolines(data: bytes) -> list[Trampoline]:
     return _decoded(parse_trampoline,
                     (r for r in iter_records(data) if r.kind == S_TRAMPOLINE))
+
+
+def extract_labels(data: bytes) -> list[LabelSymbol]:
+    """S_LABEL32 records. They sit inside a procedure's scope, which the flat
+    record walk steps through like any other nesting."""
+    return _decoded(parse_label,
+                    (r for r in iter_records(data) if r.kind == S_LABEL32))
 
 
 def parse_data(kind: int, payload: bytes) -> DataSymbol:
