@@ -53,6 +53,24 @@ def test_a_record_too_short_for_its_kind_is_skipped_not_raised():
     assert [label.name for label in codeview.extract_labels(data)] == ["real"]
 
 
+def test_a_short_label_is_counted_as_malformed_rather_than_vanishing():
+    """Dropping the record silently is the half-fix this parser must not have.
+
+    `diagnose().labels` counts records, `labels()` returns the ones that
+    decoded, and the difference has to be accounted for somewhere -- otherwise
+    a label the file contains disappears with nothing to say so.
+    """
+    # A payload with room for Offset and nothing else.
+    short = struct.pack("<HHI", 6, codeview.S_LABEL32, 0x1234)
+    pdb = _pdb(short + label32("real", 1, 0x10))
+    d = pdb.diagnose()
+
+    assert [label.name for label in pdb.labels()] == ["real"]
+    assert d.labels == 2, "the record is there, and is counted"
+    assert d.malformed_records == 1, "and the one that did not decode is named"
+    assert any("shorter than the kind they claim to be" in w for w in d.warnings)
+
+
 def _pdb(module_records: bytes, publics=()):
     module_syms = module_sym_stream(module_records)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
@@ -160,12 +178,18 @@ def test_every_addressed_label_lands_in_executable_code(pdb_rel, image_rel,
 
     pdb = _open(pdb_rel)
     image = PeImage.parse(_image(image_rel))
+    checked = 0
     for label in pdb.labels():
         if label.rva is None:
             continue
         section = image.section_of(label.rva)
         assert section is not None, f"{label.name} is outside every section"
         assert section.executable, f"{label.name} is in {section.name}"
+        checked += 1
+    # Two of the four fixtures address no label at all, so the loop above is
+    # empty for them by design. Asserting the count keeps that deliberate
+    # rather than a check that quietly stopped running.
+    assert checked == n_addressed
 
 
 @pytest.mark.parametrize("pdb_rel,image_rel,n_labels,n_addressed", CASES)
@@ -179,11 +203,14 @@ def test_every_addressed_label_falls_inside_a_function_body(
     pdb = _open(pdb_rel)
     bodies = sorted((f.rva, f.rva + f.code_size) for f in pdb.functions()
                     if f.rva is not None and f.code_size)
+    checked = 0
     for label in pdb.labels():
         if label.rva is None:
             continue
         assert any(start <= label.rva < end for start, end in bodies), (
             f"{label.name} at {label.rva:#x} is in no function body")
+        checked += 1
+    assert checked == n_addressed
 
 
 @pytest.mark.parametrize("pdb_rel,image_rel,n_labels,n_addressed", CASES)
@@ -198,30 +225,39 @@ def test_labels_are_not_in_the_function_list(pdb_rel, image_rel, n_labels,
         assert (label.segment, label.offset) not in entry_points
 
 
-def test_rust_lld_emits_label_records_that_carry_nothing():
-    """160 records, no name and no address in any of them.
+def test_rust_lld_emits_label_records_that_name_and_locate_nothing():
+    """160 records with no name, and a segment that names no section.
 
-    A twelve-byte S_LABEL32 is the fixed portion and an empty name, and the
-    segment is 0, which names no section. They are kept rather than filtered
-    because the count is what `diagnose()` reports and what `llvm-pdbutil`
-    prints: dropping them would make purepdb disagree with the file. What it
-    means for a caller is that a label listing can be non-empty and still
-    answer nothing, which no other record kind in the corpus does.
+    A twelve-byte S_LABEL32 is the fixed portion and an empty name. The Offset
+    field is *not* empty -- these carry 0x1A35 and the like -- but Segment is 0,
+    which no section table has, so nothing resolves. They are kept rather than
+    filtered because the count is what `diagnose()` reports and what
+    `llvm-pdbutil` prints: dropping them would make purepdb disagree with the
+    file. What it means for a caller is that a label listing can be non-empty
+    and still answer nothing, which no other record kind in the corpus does.
     """
     pdb = _open("rustpe/rust_pe_symbols_msvc.pdb")
     labels = pdb.labels()
     assert len(labels) == 160
     assert all(label.name == "" and label.segment == 0 for label in labels)
     assert all(label.rva is None for label in labels)
+    assert any(label.offset for label in labels), "the offsets are real"
 
 
 def test_labels_carry_names_that_no_other_record_has():
-    """The point of reading them: 1412 names that are in no other listing."""
+    """The point of reading them.
+
+    586 distinct names across the 1412 records -- a label name repeats between
+    procedures, `$LN7` most of all -- and not one of them appears in any other
+    listing purepdb produces.
+    """
     pdb = _open("sqlite/x86/sqlite3.pdb")
     known = {n for f in pdb.functions() for n in f.names}
     known |= {p.name for p in pdb.public_symbols()}
+    known |= {d.name for d in pdb.data_symbols()}
+    known |= {t.name for t in pdb.thunks()}
     named = {label.name for label in pdb.labels() if label.name}
 
-    assert len(named) > 100
+    assert len(named) == 586
     assert not (named & known)
     assert "splitnode_out" in named

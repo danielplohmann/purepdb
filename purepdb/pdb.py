@@ -197,9 +197,6 @@ class Diagnostics:
     inline_sites: int = 0
     """Inlined bodies found in the module streams. They have no entry point and
     so never reach `functions()`; `inline_sites()` is where they live."""
-    labels: int = 0
-    """Named code addresses (S_LABEL32) in the module streams. Like inline
-    sites they are not entry points, so `labels()` is where they live."""
     proc_refs: int = 0
     """S_PROCREF/S_LPROCREF records: the globals' index of every procedure.
 
@@ -222,6 +219,11 @@ class Diagnostics:
     The named-stream map lives in that stream, so when it is unreadable
     `named_streams()` comes back empty and `string_table()` comes back None --
     both silently, and both of which cost `lines()` its file names."""
+    labels: int = 0
+    """S_LABEL32 *records* in the module streams -- named code addresses, which
+    are not entry points, so `labels()` rather than `functions()` is where they
+    live. This counts records; a record too short to decode is counted here and
+    in `malformed_records`, and `labels()` is one shorter."""
 
     @property
     def truncated_streams(self) -> int:
@@ -702,6 +704,11 @@ class PDB:
         nothing calls. What it does give is a name for the addresses a
         disassembler most wants named -- interrupt-return points, exception
         continuation targets, the entry a hand-written stub jumps back to.
+
+        Module streams only, unlike `data_symbols()`: a label is scoped to the
+        procedure it sits in, and neither `link.exe` nor `rust-lld` puts one in
+        the symbol-record stream -- `llvm-pdbutil dump --globals` finds none on
+        any fixture, and neither does a direct scan of that stream.
         """
         out: list[Label] = []
         for mod in self.dbi.modules:
