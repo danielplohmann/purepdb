@@ -10,6 +10,19 @@
  * same file, so a test can require that a listing separates the two.
  */
 
+/* An enum and a named struct, so this file also carries S_CONSTANT and S_UDT
+ * records. Without them the golden rows for `constants()` and `udts()` would
+ * be 0 and 0, which passes against an accessor stubbed to return nothing. */
+enum tls_limits {
+    TLS_SLOT_COUNT = 4,
+    TLS_SCALE_MAX = 31,
+};
+
+typedef struct tls_pair {
+    int counter;
+    int scale;
+} tls_pair;
+
 __declspec(thread) int tls_global_counter = 7;
 _Thread_local int tls_global_scale = 13;
 
@@ -21,12 +34,16 @@ static int plain_static = 5;
 
 int bump(int n)
 {
+    volatile tls_pair pair;
+
     tls_global_counter += n;
     tls_static_counter += n * tls_global_scale;
     tls_static_scale += n;
     plain_static += n;
-    return tls_global_counter + tls_static_counter + tls_static_scale
-         + plain_global + plain_static;
+
+    pair.counter = tls_global_counter + tls_static_counter;
+    pair.scale = (tls_static_scale % TLS_SCALE_MAX) * TLS_SLOT_COUNT;
+    return pair.counter + pair.scale + plain_global + plain_static;
 }
 
 void start(void)

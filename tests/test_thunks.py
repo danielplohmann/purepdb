@@ -158,6 +158,12 @@ def _open(rel):
     pytest.param("sqlite/x64/sqlite3.pdb", 79, 348, id="sqlite-x64"),
     pytest.param("rustpe/rust_pe_symbols_msvc.pdb", 0, 0, id="rustpe-msvc"),
     pytest.param("rustpe32/rust_pe_symbols_i686.pdb", 0, 0, id="rustpe-i686"),
+    # An absence guard, not coverage: this row cannot kill an accessor stubbed
+    # to return nothing, and no assertion over an empty set can. It is here
+    # because the zero is structural rather than incidental -- the fixture
+    # links /nodefaultlib with no import library, so its import directory is
+    # empty and there is no thunk for a thunk record to describe. What it
+    # catches is a change that makes records appear where the image has none.
     pytest.param("tls/tls_symbols.pdb", 0, 0, id="tls-x64"),
 ])
 def test_real_counts_are_stable(rel, n_thunks, n_trampolines):
