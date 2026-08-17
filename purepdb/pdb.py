@@ -802,6 +802,32 @@ class PDB:
         it is carried uninterpreted. The names are useful on their own.
         """
         return codeview.extract_udts(self._symbol_records())
+
+    def compile_info(self) -> list[codeview.CompileInfo]:
+        """Every S_COMPILE3 record, tagged with the module it came from.
+
+        The record names the source language, the target CPU and the compiler
+        -- so a file with Rust modules says so, rather than leaving a caller to
+        infer it from the shape of the mangled names. Modules the linker
+        synthesises carry one too, reporting the language as `Link`.
+
+        One per module is the common case but not the rule: see
+        `codeview.extract_compile_infos`. Group by `module` for a per-module
+        answer; a module whose producer wrote none is simply absent.
+
+        Module streams are the only place the record appears -- the
+        symbol-record stream holds none on any fixture, and `llvm-pdbutil dump
+        --globals|--publics` finds none either -- so unlike `data_symbols()`
+        there is nothing here to deduplicate.
+        """
+        out: list[codeview.CompileInfo] = []
+        for mod in self.dbi.modules:
+            infos = codeview.extract_compile_infos(self.module_symbol_bytes(mod))
+            for info in infos:
+                info.module = mod.module_name
+            out.extend(infos)
+        return out
+
     # -- named streams and line info ----------------------------------------
 
     def named_streams(self) -> dict[str, int]:

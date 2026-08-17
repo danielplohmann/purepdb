@@ -502,6 +502,8 @@ def parse_record(kind: int, payload: bytes):
         return parse_proc(kind, payload)
     if kind in _DATA_KINDS:
         return parse_data(kind, payload)
+    if kind == S_COMPILE3:
+        return parse_compile_info(payload)
     return None
 
 
@@ -641,6 +643,161 @@ def extract_udts(data: bytes) -> list[UserDefinedType]:
         except EOFError:
             continue
     return out
+
+
+# CV_CFL_LANG, the source-language field of S_COMPILE3. Values as declared in
+# cvinfo.h and llvm/DebugInfo/CodeView/CodeViewLanguages.def; the two character
+# codes at the end are the outliers that file records as such.
+LANGUAGE_NAMES: dict[int, str] = {
+    0x00: "C",
+    0x01: "C++",
+    0x02: "Fortran",
+    0x03: "MASM",
+    0x04: "Pascal",
+    0x05: "Basic",
+    0x06: "COBOL",
+    0x07: "Link",
+    0x08: "cvtres",
+    0x09: "cvtpgd",
+    0x0A: "C#",
+    0x0B: "Visual Basic",
+    0x0C: "ILAsm",
+    0x0D: "Java",
+    0x0E: "JScript",
+    0x0F: "MSIL",
+    0x10: "HLSL",
+    0x11: "Objective-C",
+    0x12: "Objective-C++",
+    0x13: "Swift",
+    0x14: "AliasObj",
+    0x15: "Rust",
+    0x16: "Go",
+    0x44: "D",           # 'D'
+    0x53: "Swift",       # 'S', what older Swift compilers emitted
+}
+
+# CV_CPU_TYPE_e, the target field of S_COMPILE3. Same sources.
+CPU_NAMES: dict[int, str] = {
+    0x00: "Intel 8080",
+    0x01: "Intel 8086",
+    0x02: "Intel 80286",
+    0x03: "Intel 80386",
+    0x04: "Intel 80486",
+    0x05: "Pentium",
+    0x06: "Pentium Pro",
+    0x07: "Pentium III",
+    0x10: "MIPS",
+    0x11: "MIPS16",
+    0x12: "MIPS32",
+    0x13: "MIPS64",
+    0x14: "MIPS I",
+    0x15: "MIPS II",
+    0x16: "MIPS III",
+    0x17: "MIPS IV",
+    0x18: "MIPS V",
+    0x20: "M68000",
+    0x21: "M68010",
+    0x22: "M68020",
+    0x23: "M68030",
+    0x24: "M68040",
+    0x30: "Alpha",
+    0x31: "Alpha 21164",
+    0x32: "Alpha 21164A",
+    0x33: "Alpha 21264",
+    0x34: "Alpha 21364",
+    0x40: "PPC 601",
+    0x41: "PPC 603",
+    0x42: "PPC 604",
+    0x43: "PPC 620",
+    0x44: "PPC FP",
+    0x45: "PPC BE",
+    0x50: "SH3",
+    0x51: "SH3E",
+    0x52: "SH3DSP",
+    0x53: "SH4",
+    0x54: "SHmedia",
+    0x60: "ARM3",
+    0x61: "ARM4",
+    0x62: "ARM4T",
+    0x63: "ARM5",
+    0x64: "ARM5T",
+    0x65: "ARM6",
+    0x66: "ARM XMAC",
+    0x67: "ARM WMMX",
+    0x68: "ARM7",
+    0x70: "Omni",
+    0x80: "IA64",
+    0x81: "IA64-2",
+    0x90: "CEE",
+    0xA0: "AM33",
+    0xB0: "M32R",
+    0xC0: "TriCore",
+    0xD0: "x64",
+    0xE0: "EBC",
+    0xF0: "Thumb",
+    0xF4: "ARM NT",
+    0xF6: "ARM64",
+    0xF7: "Hybrid x86-ARM64",
+    0xF8: "ARM64EC",
+    0xF9: "ARM64X",
+    0xFF: "unknown",
+    0x100: "D3D11 shader",
+}
+
+
+@dataclass
+class CompileInfo:
+    """S_COMPILE3: which compiler produced a module, and for what target.
+
+    `language` states what a name-shape heuristic can only guess at -- Rust,
+    C++, or the linker's own contribution -- and it is per module, which is why
+    `module` is carried alongside it.
+    """
+
+    language: int
+    machine: int
+    frontend: tuple[int, int, int, int]  # major, minor, build, QFE
+    backend: tuple[int, int, int, int]
+    compiler: str    # free text, e.g. "clang LLVM (rustc version 1.94.1 ...)"
+    module: str = ""
+    """The linker input this came from, as DBI names it. Filled in by
+    `PDB.compile_info()`, which is what knows the module."""
+
+    @property
+    def language_name(self) -> str:
+        return LANGUAGE_NAMES.get(self.language, f"{self.language:#04x}")
+
+    @property
+    def machine_name(self) -> str:
+        return CPU_NAMES.get(self.machine, f"{self.machine:#06x}")
+
+
+def parse_compile_info(payload: bytes) -> CompileInfo:
+    r = Reader(payload)
+    flags = r.u32()  # the language is its low byte; the rest are feature bits
+    machine = r.u16()
+    frontend = (r.u16(), r.u16(), r.u16(), r.u16())
+    backend = (r.u16(), r.u16(), r.u16(), r.u16())
+    return CompileInfo(
+        language=flags & 0xFF,
+        machine=machine,
+        frontend=frontend,
+        backend=backend,
+        compiler=r.cstring(),
+    )
+
+
+def extract_compile_infos(data: bytes) -> list[CompileInfo]:
+    """Every S_COMPILE3 in one module's symbol region.
+
+    A module is not limited to one. An import library arrives as a single DBI
+    module holding the records of every member `.obj` in it, so those modules
+    carry one identical record per import -- 25 of them in one module of the
+    sqlite x64 fixture. Reporting only the first would undercount the file by
+    half.
+    """
+    return _decoded(parse_compile_info,
+                    (r for r in iter_records(data) if r.kind == S_COMPILE3))
 
 
 def parse_thunk(payload: bytes) -> ThunkSymbol:

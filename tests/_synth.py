@@ -447,6 +447,18 @@ def udt(name: str, type_index: int = 0x1004) -> bytes:
     return make_record(0x1108, payload)
 
 
+def compile3(compiler: str, *, language: int = 0x15, machine: int = 0xD0,
+             frontend: tuple[int, int, int, int] = (1, 0, 0, 0),
+             backend: tuple[int, int, int, int] = (2, 0, 0, 0),
+             feature_flags: int = 0) -> bytes:
+    """S_COMPILE3. The language is the low byte of the flags word, the feature
+    bits the 24 above it."""
+    payload = struct.pack("<IH", (feature_flags << 8) | language, machine)
+    payload += struct.pack("<8H", *frontend, *backend)
+    payload += compiler.encode() + b"\x00"
+    return make_record(0x113C, payload)
+
+
 def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74,
             kind: int = 0x110D) -> bytes:
     """S_GDATA32, or S_LDATA32 with `kind=0x110C`: same layout either way."""

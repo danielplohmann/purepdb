@@ -73,6 +73,7 @@ def exercise(data: bytes) -> list:
         pdb.data_symbols(),
         pdb.constants(),
         pdb.udts(),
+        pdb.compile_info(),
         pdb.thunks(),
         pdb.trampolines(),
         pdb.inline_sites(),
