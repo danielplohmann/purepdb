@@ -130,6 +130,23 @@ def test_unrecognised_magic_still_raises_msf_error():
         MsfFile(b"not a pdb at all" + b"\x00" * 512)
 
 
+def test_a_name_that_is_not_utf8_does_not_raise():
+    """A PDB holds whatever bytes its producer wrote, and nothing obliges a
+    name to be UTF-8. Decoding one strictly raises `UnicodeDecodeError`, which
+    is a stdlib exception escaping the parser -- the class of leak `PdbError`
+    exists to prevent, and one no caller would think to catch on an attribute
+    read. `Reader.cstring` replaces the undecodable bytes instead."""
+    from purepdb import codeview
+    from purepdb.reader import Reader
+    from tests._synth import make_record
+
+    assert Reader(b"f\x9do\x00").cstring() == "f�o"
+
+    payload = struct.pack("<IIH", 0x2, 0x10, 1) + b"na\x9de\x00"
+    record = make_record(codeview.S_PUB32, payload)
+    assert [p.name for p in codeview.extract_publics(record)] == ["na�e"]
+
+
 def test_every_error_is_a_pdb_error():
     """One exception type is enough to wrap a directory sweep."""
     assert issubclass(MsfError, PdbError)
