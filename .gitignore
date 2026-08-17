@@ -6,4 +6,5 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-.pytest_cache/fuzz-failures/
+.pytest_cache/
+fuzz-failures/

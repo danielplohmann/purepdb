@@ -14,7 +14,13 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `PDB.compile_info()`: the S_COMPILE3 record of every module, naming the source
+  language, the target CPU and the compiler's own version string. The language
+  field states what a caller otherwise has to infer from the shape of the
+  mangled names — a Rust module says `Rust`, and the linker's own contribution
+  says `Link`. `purepdb.CompileInfo`.
 
 ## [0.3.0] - 2026-08-14
 

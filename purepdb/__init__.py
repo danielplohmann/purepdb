@@ -10,6 +10,7 @@ empty list.
 """
 
 from .codeview import (
+    CompileInfo,
     Constant,
     DataSymbol,
     ProcRef,
@@ -36,6 +37,7 @@ __version__ = "0.3.0"
 
 __all__ = [
     "PDB",
+    "CompileInfo",
     "Constant",
     "DataSymbol",
     "Diagnostics",

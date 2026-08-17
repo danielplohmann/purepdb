@@ -115,12 +115,33 @@ On the Rust fixture that is 3797 sites against 248 procedure records — fifteen
 inlined bodies for every function with an entry point, and the largest naming
 gap the parser had.
 
+## What produced a module
+
+`compile_info()` reports the `S_COMPILE3` of every module: the source language,
+the target CPU, and the compiler's own version string.
+
+```python
+for c in pdb.compile_info():
+    print(c.language_name, c.machine_name, c.compiler, c.module)
+    # Rust  Pentium III  clang LLVM (rustc version 1.94.1 ...)  main...rcgu.o
+```
+
+The language is the useful part, because it is stated rather than inferred: a
+consumer choosing a demangler, or asking whether a binary contains Rust at all,
+would otherwise have to guess from the shape of the mangled names. Modules the
+linker synthesises carry the record too and report `Link`.
+
+One record per module is the common case, not the rule — an import library
+arrives as a single module holding the records of every member, so 145 of
+sqlite3 x64's records come from 67 modules.
+
 ## Scope
 
 **Supported:** MSF 7.00 container; PDB info stream; DBI stream (module list,
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
 `S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
+`S_COMPILE3`,
 `S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary annotations;
 section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
 fallback when that table is absent; OMAP address translation for images whose
