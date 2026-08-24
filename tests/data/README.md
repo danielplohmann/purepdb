@@ -77,10 +77,11 @@ The shapes that once needed a fixture, and the one still open:
 * **OMAP tables** — still derived, not committed. `test_omap.py` re-serialises
   a real PDB with an address map and an original section table added, so the
   container, the DBI stream and every symbol record are real and only the
-  tables are ours. BBT is not publicly available, and a vendor symbol-server
-  PDB is not redistributable, so a genuinely BBT-processed file remains the one
-  shape no test here has seen. See issue #25: fetching one at test time belongs
-  in `dev/`, beside the llvm-pdbutil cross-check, rather than in this directory.
+  tables are ours. A genuinely BBT-processed file remains the one shape no test
+  here has seen; the section below records why, and issue #25 tracks it.
+  Fetching one at test time is a possibility, but it belongs in `dev/` beside
+  the llvm-pdbutil cross-check rather than in this directory — the suite is
+  hermetic and `README.md` says so.
 
 ### On finding a slot-10 fixture
 
