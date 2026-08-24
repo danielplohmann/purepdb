@@ -100,7 +100,7 @@ activate it first and drop the override):
 | CLI | `.venv/bin/purepdb <command> <file.pdb>` — `purepdb --help` lists all 15 |
 | llvm cross-check | `.venv/bin/python dev/validate_against_llvm.py` (needs `llvm-pdbutil`; skips cleanly without it) |
 
-Expected state on a clean tree: **588 tests pass**, `ruff check` and `ty check`
+Expected state on a clean tree: **566 tests pass**, `ruff check` and `ty check`
 both clean, and the fuzzer reports no escaped exception. Run tests, lint *and*
 a quick fuzz pass before considering work complete.
 
@@ -354,13 +354,21 @@ reading.
 `tests/data/` is excluded from both sdist and wheel targets, and the tests that
 use it **skip** when it is absent. CI proves this by building an sdist and
 running the suite from it. A fixture-dependent test that *fails* instead of
-skipping breaks that job. New fixtures must be small, must be own builds or
-public-domain sources, and must have their toolchain recorded in
-`tests/data/README.md` — a fixture whose provenance is unclear cannot stay in a
-public repository. A Microsoft symbol-server PDB is **not** eligible however
-useful it would be; that was proposed once and rejected on those grounds. The
-current set is sqlite x86/x64, two rust-lld builds, one of those with slot 5
-cleared, and a purpose-built `tls/` fixture for thread-local records.
+skipping breaks that job. New fixtures must be small and must have their toolchain and licence recorded
+in `tests/data/README.md` — a fixture whose provenance is unclear cannot stay
+in a public repository.
+
+Prefer own builds or public-domain sources. **Third-party material is allowed
+only when its licence permits redistribution**, and then only with the licence
+named, the attribution in `NOTICE`, and a SHA-256 written down. `syzygy/` is
+the one such fixture (Apache-2.0). The test that matters is the licence, not
+the authorship: a Microsoft symbol-server PDB is ineligible because it permits
+no redistribution at all, not because it is someone else's build — that was
+proposed once and declined, and the distinction is worth keeping straight.
+
+The current set is sqlite x86/x64, two rust-lld builds (one with slot 5
+cleared), a purpose-built `tls/` fixture for thread-local records, and
+`syzygy/` for a real OMAP table.
 
 ### Provenance is a legal boundary, not a formality
 purepdb is an independent implementation written from **published format
@@ -396,12 +404,16 @@ that is what `count_malformed_records` uses to ask whether a record is shorter
 than its kind requires. A kind missing from it has its damaged records dropped
 by the extractors and **counted by nothing**.
 
-`tests/test_truncation.py` guards this with a parametrized list of kinds,
-documented as "every kind `parse_record` dispatches". That list is maintained by
-hand and drifted three times in one day's merges. **If you add a record kind,
-add it to both** — and note that `S_INLINESITE` is deliberately absent from the
-list because a 12-byte payload is a whole record of that kind. Issue #46 tracks
-deriving one from the other.
+The dispatch is the table `_RECORD_PARSERS` at the foot of `codeview.py`, which
+exports `DISPATCHED_KINDS`. `tests/test_truncation.py` holds the expected list
+and `test_the_dispatch_and_this_list_agree` couples the two, so **adding a kind
+to the dispatch without adding it to that list fails, and so does removing
+one**.
+
+The list is written out rather than derived on purpose: parametrizing over
+`DISPATCHED_KINDS` was tried and is wrong, because a kind removed from the
+dispatch takes its own test case with it — the suite reports one fewer passing
+test and no failure. Do not "simplify" it back to a derived list.
 
 ### Reality check — common traps
 - **`tests/_pe.py` must stay ignorant of purepdb.** Importing the package there
