@@ -296,7 +296,10 @@ To cut a release:
 
 1. Move the `Unreleased` entries under a new `## [x.y.z] - YYYY-MM-DD`
    heading, and update the link definitions at the bottom of the file.
-2. Set the same version in `pyproject.toml`.
+2. Set the same version in **both** `pyproject.toml` and
+   `purepdb/__init__.py`. Nothing ties them together, so `tests/test_version.py`
+   asserts they agree — the release workflow compares the tag against
+   `pyproject.toml` alone and would not notice on its own.
 3. Tag it: `git tag -a vx.y.z -m 'purepdb x.y.z'` and push the tag.
 
 Pushing the tag runs `.github/workflows/release.yml`, which builds the sdist

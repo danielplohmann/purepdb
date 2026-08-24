@@ -14,85 +14,70 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] - 2026-08-24
+
 ### Added
 
-- `docs/`: three write-ups of what building this taught, each figure measured
-  against a committed fixture. `omap.md` on Optional Debug Header slot 10 and the
-  one place a missing stream gives wrong addresses rather than missing ones;
-  `reading-real-pdbs.md` on what real files do that the format documentation does
-  not say; `validating.md` on how any of it is known.
-- `dev/validate_omap_against_windows.py`, which checks OMAP translation against
-  Windows system binaries and the PDBs Microsoft's symbol server has for them.
-  Nothing is redistributed: the images are the developer's own and the symbols
-  land in an untracked cache. The oracle is the export table, which is written
-  in the shipped image's address space and owes nothing to the PDB. On six pairs
-  from XP and Win7, `ntdll` agrees on 99.8%–100% of its exports and **0 of 8730
-  match the untranslated address**. Extended to eighteen pairs across XP, 7, 10
-  and 11: no Win10 or Win11 PDB carries a single OMAP entry, so the practice
-  ended between Win7 and Win10.
-- OMAP translation is now checked against moved code rather than against
-  arithmetic. `tests/_relink.py` and `tools/relink_omap.py` move the function
-  bodies in a copy of one of our own fixtures and write the tables that describe
-  the move — Optional Debug Header slot 10, slot 5, and both map directions —
-  so the PE oracle applies: the bytes at the address purepdb reports must be the
-  bytes of the function it names. 235 bodies, 30 distinct deltas. Every mutation
-  of the translation rule tried against it fails.
-- A groundtruth fixture carrying a real OMAP table: `tests/data/syzygy/`,
-  output from Google's Syzygy `relink`, the only open-source tool that writes
-  one. 1228 entries, where every other OMAP test builds the table it reads.
-  Third-party material under the Apache License 2.0 — the first in this corpus,
-  attributed in `NOTICE`. It does not reach the Optional Debug Header slot 10
-  branch, which Syzygy never writes, so that one stays synthetic.
-- A `diagnose()` warning for a BBT-processed PDB that carries the pre-BBT
-  section table (Optional Debug Header slot 10) and no section headers (slot 5).
-  Symbol RVAs are final, post-BBT addresses, while the only section table left
-  to display is the pre-BBT one the map translates out of — two address spaces,
-  both looking like RVAs, with nothing previously marking the mismatch.
-- `PDB.compile_info()`: the S_COMPILE3 record of every module, naming the source
-  language, the target CPU and the compiler's own version string. The language
-  field states what a caller otherwise has to infer from the shape of the
-  mangled names — a Rust module says `Rust`, and the linker's own contribution
-  says `Link`. `purepdb.CompileInfo`.
-- CLI subcommands for every listing the library produces: `lines`, `inline`,
-  `thunks`, `trampolines`, `labels`, `constants`, `udts` and `modules`, beside
-  the existing `functions`, `publics`, `info` and `diagnose`. Output is one
-  record per line with stable leading columns; counts and warnings go to
-  stderr. `purepdb` with no arguments lists every command and its columns.
-  `thunks`, `trampolines`, `labels`, `constants`, `udts`, `modules`, `data`
-  and `sections`, beside the existing `functions`, `publics`, `info` and
-  `diagnose`. Output is one record per line with stable leading columns;
-  counts and warnings go to stderr. `purepdb` with no arguments lists every
-  command and its columns.
-- CLI subcommands for the listings that had none: `lines`, `inline`, `thunks`,
-  `trampolines`, `labels`, `constants`, `udts`, `modules`, `data` and
-  `sections`, beside the existing `functions`, `publics`, `info` and
-  `diagnose`. Output is one record per line with stable leading columns and
-  the name last; counts, warnings and usage go to stderr. `purepdb --help`
-  lists every command and its columns.
 - `S_LABEL32` decoding: named code addresses inside procedures — assembly
   labels, exception continuation targets, interrupt-return points. `PDB.labels()`,
   `Label`, `codeview.LabelSymbol`, and `Diagnostics.labels`. They are
   deliberately *not* merged into `functions()`, because a label is an address
   within a body that already has an entry point.
-- `diagnose()` accounts for every record purepdb drops. `malformed_records`
-  now covers each kind with a parser rather than only publics, procs and data;
-  `Diagnostics.undecoded_constants` covers a constant whose numeric leaf is one
-  purepdb does not decode, which loses the name with the value; and
-  `Diagnostics.unplaced_inline_sites` covers a site whose annotations describe
-  no code. Each has a warning, so no record can now go missing in silence.
 - Thread-local variables: `S_GTHREAD32`/`S_LTHREAD32` are decoded and reported
   by `PDB.thread_locals()`, which is deliberately separate from
   `data_symbols()` rather than part of it. A thread-local's `segment:offset`
   addresses the TLS initialisation template, not the variable — which has no
   address in the image at all — so the field is `template_rva` rather than
   `rva`, and the two are not comparable. `ThreadLocal`, `ThreadLocalSymbol`.
-- `Diagnostics.thread_local_records`, printed by the `diagnose` subcommand, and
-  a warning when a file has thread-local records — `data_symbols()` deliberately
-  omits them, and a short listing with no explanation is the thing `diagnose()`
-  exists to prevent.
-- A `tls` fixture: a freestanding x64 PE and PDB carrying both thread-local
-  record kinds, with the four template addresses cross-checked against the
-  initial values in the image.
+- `PDB.compile_info()`: the S_COMPILE3 record of every module, naming the source
+  language, the target CPU and the compiler's own version string. The language
+  field states what a caller otherwise has to infer from the shape of the
+  mangled names — a Rust module says `Rust`, and the linker's own contribution
+  says `Link`. One record per module is the common case but not the rule: an
+  import library arrives as a single module holding the records of every member.
+  `purepdb.CompileInfo`.
+- CLI subcommands for the listings that had none: `data`, `labels`, `thunks`,
+  `trampolines`, `inline`, `lines`, `constants`, `udts`, `modules`, `thread`
+  and `sections`, beside the existing `functions`, `publics`, `info` and
+  `diagnose`. Output is one record per line with stable leading columns and the
+  name last, since a name may contain spaces; counts, warnings and usage go to
+  stderr, so a redirected stdout holds records and nothing else. `purepdb
+  --help` lists every command with its columns, generated from the table the
+  CLI dispatches on.
+- A `diagnose()` warning for a BBT-processed PDB that carries the pre-BBT
+  section table (Optional Debug Header slot 10) and no section headers (slot 5).
+  Symbol RVAs are final, post-BBT addresses, while the only section table left
+  to display is the pre-BBT one the map translates out of — two address spaces,
+  both looking like RVAs, with nothing previously marking the mismatch.
+- `diagnose()` accounts for every record purepdb drops. `malformed_records`
+  now covers each kind with a parser rather than only publics, procs and data;
+  `Diagnostics.undecoded_constants` covers a constant whose numeric leaf is one
+  purepdb does not decode, which loses the name with the value; and
+  `Diagnostics.unplaced_inline_sites` covers a site whose annotations describe
+  no code. Each has a warning, so no record can now go missing in silence.
+- `Diagnostics.thread_local_records`, reported by the `diagnose` subcommand with
+  a note that `thread_locals()` and not `data_symbols()` is where they are.
+  Deliberately not a `warnings` entry: a binary using thread-local storage is an
+  ordinary binary, and every other sentence in that list names something wrong.
+- `Diagnostics.pdb_info_error`, and a warning when the PDB Info stream cannot be
+  read — the named-stream map lives in it, so `named_streams()` comes back empty
+  and `/names` cannot be found, both silently until now.
+- Fixtures: `tests/data/tls/`, a freestanding x64 pair carrying both
+  thread-local record kinds, with the four template addresses cross-checked
+  against the initial values in the image;
+  `tests/data/rustpe32/rust_pe_symbols_i686_no_slot5.pdb`, which reaches the
+  Section Map fallback from a committed file rather than by clearing a slot at
+  runtime; and `tests/data/syzygy/`, output from Google's Syzygy `relink`
+  carrying 1228 real OMAP entries. The last is the first third-party material in
+  this corpus, Apache-2.0 and attributed in `NOTICE`.
+- `tests/_relink.py` and `tools/relink_omap.py`, which move function bodies in a
+  copy of one of our own fixtures and write the tables describing the move —
+  slot 10, slot 5 and both map directions — so that OMAP translation is checked
+  against moved bytes rather than against arithmetic chosen on both sides. The
+  PE oracle then applies: the address purepdb reports must hold the function it
+  names.
 - `dev/validate_against_llvm.py`, which cross-checks purepdb against
   `llvm-pdbutil` record by record — procedures, publics, labels, constants,
   UDTs, the section-contribution table and the module attribution built on it,
@@ -100,15 +85,24 @@ resolve *differently* would be breaking, and would say so here.
   It skips cleanly when the toolchain is absent and exits non-zero on any
   disagreement. A nightly CI job runs it; it is deliberately not run on pull
   requests, where a reference-tool version bump would fail unrelated changes.
+- `dev/validate_omap_against_windows.py`, which checks OMAP translation against
+  Windows system binaries and the PDBs Microsoft's symbol server has for them.
+  Nothing is redistributed: the images are the developer's own and the symbols
+  land in an untracked cache. The oracle is the export table, written in the
+  shipped image's own address space. Over eighteen pairs spanning XP, 7, 10 and
+  11, `ntdll` agrees on 99.8%–100% of its exports, and **0 of 8730 exports match
+  the untranslated address** on the pairs that carry a map.
+- `docs/`: three write-ups, each figure measured against a committed fixture.
+  `omap.md` on Optional Debug Header slot 10 and the one place in this format
+  where a missing stream gives wrong addresses rather than missing ones —
+  including that no Win10 or Win11 PDB carries a single OMAP entry, so the
+  practice ended between Win7 and Win10; `reading-real-pdbs.md` on what real
+  files do that the format documentation does not say; `validating.md` on how
+  any of it is known.
+- `AGENTS.md`, describing the project for agents and humans working in it.
 
 ### Fixed
 
-- `diagnose()` no longer warns about a PDB that merely carries thread-local
-  records. A binary using thread-local storage is an ordinary binary, and every
-  other entry in `Diagnostics.warnings` names something wrong, so an entry
-  firing for a whole class of healthy files taught a reader to skip the list.
-  `Diagnostics.thread_local_records` and the note beside it in `purepdb
-  diagnose` carry the explanation instead.
 - `PDB.info()` rejects a PDB Info stream shorter than the 28-byte header it
   reads, with `MsfError`. The stream's length comes from the file, so it is a
   bound the file can lie about, and nothing checked it: below 12 bytes the
@@ -123,9 +117,6 @@ resolve *differently* would be breaking, and would say so here.
 - `purepdb info` reports both of those instead of ending in a traceback: the
   Info stream is read after the file is opened, so guarding only `PDB.open()`
   left it uncovered.
-- `diagnose()` says when the PDB Info stream cannot be read. The named-stream
-  map lives in it, so `named_streams()` comes back empty and `/names` cannot
-  be found — both silently, until now.
 - `PDB.data_symbols()` reports each symbol once. A module's stream and the
   symbol-record stream both describe a file-static symbol, and the globals
   stream repeats a few of its own, so the listing counted 633 records as 633
@@ -133,6 +124,9 @@ resolve *differently* would be breaking, and would say so here.
   only when name, segment, offset *and* kind all repeat; the surviving set is
   identical to what `llvm-pdbutil` prints across `dump --symbols` and
   `dump --globals`, deduplicated the same way.
+- `.gitignore` had `.pytest_cache/` and `fuzz-failures/` joined into one line,
+  so the pattern matched only the literal path `.pytest_cache/fuzz-failures/`
+  and the fuzzer's saved inputs were not ignored.
 
 ## [0.3.0] - 2026-08-14
 
@@ -209,6 +203,7 @@ resolve *differently* would be breaking, and would say so here.
 The first release documented here. See the repository history for what it
 contained; entries above describe changes made since it.
 
-[Unreleased]: https://github.com/danielplohmann/purepdb/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/danielplohmann/purepdb/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/danielplohmann/purepdb/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/danielplohmann/purepdb/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/danielplohmann/purepdb/releases/tag/v0.2.0
