@@ -16,6 +16,13 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Added
 
+- OMAP translation is now checked against moved code rather than against
+  arithmetic. `tests/_relink.py` and `tools/relink_omap.py` move the function
+  bodies in a copy of one of our own fixtures and write the tables that describe
+  the move — Optional Debug Header slot 10, slot 5, and both map directions —
+  so the PE oracle applies: the bytes at the address purepdb reports must be the
+  bytes of the function it names. 235 bodies, 30 distinct deltas. Every mutation
+  of the translation rule tried against it fails.
 - A groundtruth fixture carrying a real OMAP table: `tests/data/syzygy/`,
   output from Google's Syzygy `relink`, the only open-source tool that writes
   one. 1228 entries, where every other OMAP test builds the table it reads.

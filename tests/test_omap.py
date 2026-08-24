@@ -656,3 +656,104 @@ def test_two_publics_sit_in_text_the_shipped_image_no_longer_has():
     assert text_pdb.virtual_address + text_pdb.virtual_size == 0xb196
     text_pe = image.sections[0]
     assert text_pe.virtual_address + text_pe.virtual_size == 0xb157
+
+
+# --- a real move, described by a real table ----------------------------------
+#
+# The tests above add tables to an image whose code never moved, so what they
+# check is arithmetic chosen on both sides. These build the pair with
+# `tools/relink_omap.py`, which moves the bodies in `.text` for real and writes
+# the tables that say so -- and then the check is the PE oracle: the bytes at
+# the address purepdb reports must be the bytes of the function it names.
+#
+# Built at runtime rather than committed, because a tool in the repository plus
+# a fixture already in it is a reproducible pair and a third binary would not
+# add anything. See `tests/data/README.md` on why the shape cannot simply be
+# obtained: nothing public writes Optional Debug Header slot 10.
+
+def _relinked():
+    """The rustpe pair, relinked: (original pdb, original image, new pdb, new image)."""
+    from tests import _relink as tool
+
+    base = _data_path("rustpe")
+    pdb_path, img_path = (base / "rust_pe_symbols_msvc.pdb",
+                          base / "rust_pe_symbols_msvc.exe")
+    if not pdb_path.exists() or not img_path.exists():
+        pytest.skip("groundtruth fixture missing: rustpe")
+
+    image, pdb_bytes = img_path.read_bytes(), pdb_path.read_bytes()
+    original_pdb = PDB.from_bytes(pdb_bytes)
+    sections = tool.sections_of(image)
+    text = next(s for s in sections if s["name"] == ".text")
+    moves = tool.plan_moves(original_pdb, text["virtual_address"],
+                            text["virtual_size"])
+    new_image, new_vsize = tool.relink_image(image, moves)
+    final = [dict(s) for s in sections]
+    next(s for s in final if s["name"] == ".text")["virtual_size"] = new_vsize
+    new_pdb = PDB.from_bytes(
+        tool.relink_pdb(pdb_bytes, sections, final, moves))
+    return original_pdb, image, new_pdb, new_image, moves
+
+
+def test_a_relinked_pair_carries_both_tables_and_a_many_entry_map():
+    """The shape BBT produces, and the one no fixture could be found for.
+
+    Slot 10 and slot 5 both present with the map, which is the ordinary
+    BBT shape -- so `diagnose()` is right to stay silent about it, and does.
+    """
+    _original, _image, pdb, _new_image, moves = _relinked()
+    d = pdb.diagnose()
+
+    assert d.omap_entries == len(moves) > 200
+    assert len({new - old for old, new, _ in moves}) > 20, \
+        "a single delta would not exercise a range lookup"
+    assert d.has_original_sections and d.has_section_headers
+    assert d.warnings == [], d.warnings
+
+
+def test_every_translated_address_names_the_bytes_it_claims_to():
+    """The check no OMAP test could make before: the PE oracle over a move.
+
+    `tests/_pe.py` never opens a PDB, so this compares purepdb's translated
+    address against the image's own bytes. A translation that is off by
+    anything at all puts the body somewhere it is not.
+    """
+    from tests._pe import PeImage, _rva_to_file_offset
+
+    original, image, pdb, new_image, _moves = _relinked()
+    old_img = PeImage.parse(image)
+    new_img = PeImage.parse(new_image)
+
+    # Joined on `(segment, offset)`, which is how the PDB addresses a symbol and
+    # what the move leaves untouched -- only the rva it resolves to changes.
+    # Not on the name: `core::fmt::impl$82::fmt<str$>` is two different bodies
+    # at two addresses in this fixture, so a name is not an identity here.
+    before = {(f.segment, f.offset): f for f in original.functions()}
+    checked = moved = 0
+    for f in pdb.functions():
+        g = before.get((f.segment, f.offset))
+        if g is None or f.rva is None or g.rva is None or not g.code_size:
+            continue
+        checked += 1
+        moved += f.rva != g.rva
+        here = _rva_to_file_offset(new_image, new_img, f.rva)
+        there = _rva_to_file_offset(image, old_img, g.rva)
+        assert here is not None and there is not None, f.name
+        assert new_image[here:here + g.code_size] == \
+            image[there:there + g.code_size], \
+            f"{f.name}: rva {f.rva:#x} does not hold its body"
+
+    assert checked > 200, checked
+    assert moved > 200, f"only {moved} of {checked} addresses actually moved"
+
+
+def test_the_relinked_pdb_loses_no_symbol():
+    """Moving code must not change what the PDB describes, only where it is."""
+    original, _image, pdb, _new_image, _moves = _relinked()
+
+    assert {(f.segment, f.offset, f.name) for f in pdb.functions()} == \
+        {(f.segment, f.offset, f.name) for f in original.functions()}
+    d, e = pdb.diagnose(), original.diagnose()
+    assert (d.proc_records, d.public_records) == (e.proc_records,
+                                                  e.public_records)
+    assert (d.malformed_records, d.truncated_streams) == (0, 0)
