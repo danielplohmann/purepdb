@@ -43,6 +43,18 @@ STREAM_IPI = 4
 CV_SIGNATURE_C13 = 4
 CV_SIGNATURE_SIZE = 4
 
+# The fixed header of the PDB Info stream: version, signature, age, GUID. It
+# ends exactly where the named-stream map begins, so the two are one fact and
+# are written down once.
+PDB_INFO_HEADER_SIZE = NAMED_STREAM_MAP_OFFSET
+GUID_OFFSET = 12
+
+# VC70 is where the header grew the GUID this reads. Older streams put the
+# named-stream map at offset 12, so the bytes at 12..28 are the map, not a
+# GUID -- `llvm-pdbutil` refuses such a file outright rather than reporting
+# one. Newer versions only append, so this is a floor and not a list.
+PDB_INFO_VC70 = 20000404
+
 class _Unread:
     """Sentinel type for "this stream has not been looked for yet", so that a
     PDB without one is not searched again on every call. A distinct type rather
@@ -358,18 +370,6 @@ class PDB:
 
     # -- metadata -----------------------------------------------------------
 
-    # The fixed header of the PDB Info stream: version, signature, age, GUID.
-    # The fixed header ends exactly where the named-stream map begins, so the
-    # two are one fact and are written down once.
-    PDB_INFO_HEADER_SIZE = NAMED_STREAM_MAP_OFFSET
-    GUID_OFFSET = 12
-
-    # VC70 is where the header grew the GUID this reads. Older streams put the
-    # named-stream map at offset 12, so the bytes at 12..28 are the map, not a
-    # GUID -- `llvm-pdbutil` refuses such a file outright rather than reporting
-    # one. Newer versions only append, so this is a floor and not a list.
-    PDB_INFO_VC70 = 20000404
-
     def info(self) -> PdbInfo:
         """Version, signature, age and GUID from the PDB Info stream.
 
@@ -384,19 +384,19 @@ class PDB:
         layout carries no GUID at all.
         """
         data = self.msf.read_stream(STREAM_PDB_INFO)
-        if len(data) < self.PDB_INFO_HEADER_SIZE:
+        if len(data) < PDB_INFO_HEADER_SIZE:
             raise MsfError(
                 f"the PDB Info stream is {len(data)} bytes, too short for the "
-                f"{self.PDB_INFO_HEADER_SIZE}-byte header"
+                f"{PDB_INFO_HEADER_SIZE}-byte header"
             )
         version, signature, age = struct.unpack_from("<III", data, 0)
-        if version < self.PDB_INFO_VC70:
+        if version < PDB_INFO_VC70:
             raise UnsupportedPdbError(
                 f"PDB Info stream version {version} predates VC70 "
-                f"({self.PDB_INFO_VC70}), whose header is the one this reads: "
+                f"({PDB_INFO_VC70}), whose header is the one this reads: "
                 f"there is no GUID in it to report"
             )
-        guid = data[self.GUID_OFFSET:self.PDB_INFO_HEADER_SIZE]
+        guid = data[GUID_OFFSET:PDB_INFO_HEADER_SIZE]
         return PdbInfo(version=version, signature=signature, age=age, guid=guid)
 
     # -- sections -----------------------------------------------------------

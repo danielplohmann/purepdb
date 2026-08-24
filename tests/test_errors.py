@@ -12,6 +12,7 @@ import pytest
 from purepdb import PDB, MsfError, PdbError, UnsupportedPdbError
 from purepdb.dbi import DbiStream
 from purepdb.msf import MsfFile
+from purepdb.pdb import PDB_INFO_VC70
 from tests._synth import (
     build_msf,
     dbi_stream,
@@ -56,7 +57,7 @@ def _info_pdb_bytes(info: bytes) -> bytes:
     ])
 
 
-def _vc70_info(version: int = PDB.PDB_INFO_VC70) -> bytes:
+def _vc70_info(version: int = PDB_INFO_VC70) -> bytes:
     """A whole PDB Info header: version, signature, age, then the GUID."""
     return struct.pack("<III", version, 0xAABBCCDD, 1) + b"\x11" * 16
 
@@ -83,7 +84,7 @@ def test_a_pdb_info_stream_of_exactly_the_header_size_is_read():
     pdb = _pdb_with_info_stream(_vc70_info())
 
     info = pdb.info()
-    assert (info.version, info.signature, info.age) == (PDB.PDB_INFO_VC70,
+    assert (info.version, info.signature, info.age) == (PDB_INFO_VC70,
                                                         0xAABBCCDD, 1)
     assert info.guid == b"\x11" * 16
 
