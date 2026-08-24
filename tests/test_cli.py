@@ -39,6 +39,7 @@ from tests._synth import (
     section_contributions,
     section_header,
     subsection,
+    thread32,
     thunk32,
     trampoline,
     udt,
@@ -68,12 +69,11 @@ def _module_records() -> bytes:
 @pytest.fixture
 def sample(tmp_path):
     """A PDB with a proc, a public, a label, an inline site, a thunk, a
-    trampoline, a constant, a UDT, line info and two modules.
+    trampoline, a constant, a UDT, a thread-local, line info and two modules.
 
-    Deliberately no thread-local record: one would make the thread-local
-    warning fire, and `test_records_go_to_stdout_and_counts_to_stderr` relies
-    on this sample producing no warnings at all. `thread` is covered against
-    the real `tls` fixture instead.
+    One record of every listed kind, which is what lets
+    `test_records_go_to_stdout_and_counts_to_stderr` treat an empty listing as
+    a failure rather than something to skip.
     """
     raw_names, offsets = names_stream(["", "main.c"])
     checksums, entry_offsets = file_checksums([(offsets["main.c"], b"")])
@@ -96,7 +96,8 @@ def sample(tmp_path):
 
     publics = [pub32("_main", 1, 0x40)]
     symrecords = (b"".join(publics) + constant("MAX_PAGE", 42) + udt("Pager")
-                  + gdata32("g_page_cache", 1, 0x800))
+                  + gdata32("g_page_cache", 1, 0x800)
+                  + thread32("tls_slot", 1, 0x900))
 
     streams = [
         b"",
@@ -468,12 +469,6 @@ def test_records_go_to_stdout_and_counts_to_stderr(sample, capsys):
     """
     for name, (_handler, noun, _columns) in _COMMANDS.items():
         if noun is None:
-            continue
-        # `thread` is the one listing this sample cannot carry: a thread-local
-        # record makes `diagnose()` warn, and the last assertion below requires
-        # a warning-free file. Covered against the `tls` fixture in
-        # `test_thread_lists_the_tls_fixture` instead.
-        if name == "thread":
             continue
         out, err = _run(capsys, name, sample)
         assert out, f"{name} printed no records at all"

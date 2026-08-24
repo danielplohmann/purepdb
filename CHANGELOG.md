@@ -76,6 +76,12 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Fixed
 
+- `diagnose()` no longer warns about a PDB that merely carries thread-local
+  records. A binary using thread-local storage is an ordinary binary, and every
+  other entry in `Diagnostics.warnings` names something wrong, so an entry
+  firing for a whole class of healthy files taught a reader to skip the list.
+  `Diagnostics.thread_local_records` and the note beside it in `purepdb
+  diagnose` carry the explanation instead.
 - `PDB.info()` rejects a PDB Info stream shorter than the 28-byte header it
   reads, with `MsfError`. The stream's length comes from the file, so it is a
   bound the file can lie about, and nothing checked it: below 12 bytes the

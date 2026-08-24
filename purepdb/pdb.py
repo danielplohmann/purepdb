@@ -270,7 +270,15 @@ class Diagnostics:
     Records, not variables: a thread-local with internal linkage is in both, so
     this is higher than `len(thread_locals())`, which deduplicates. What it is
     for is explaining a `data_symbols()` listing that does not mention a
-    variable the caller knows is in the binary."""
+    variable the caller knows is in the binary.
+
+    Deliberately not a `warnings` entry. A binary using thread-local storage is
+    an ordinary binary, and every other sentence in that list names something
+    wrong -- a stream that could not be read, records dropped, addresses that
+    are a reconstruction. An entry that fires for a whole class of healthy
+    files teaches a reader to skip the list, which costs the entries that do
+    matter. The count and the note beside it in `purepdb diagnose` are the
+    explanation, in the report rather than in the alarm channel."""
 
     @property
     def truncated_streams(self) -> int:
@@ -411,15 +419,6 @@ class Diagnostics:
                 f"{self.unplaced_inline_sites} inline site(s) have no address "
                 f"to report: their annotations describe no code, or no open "
                 f"procedure encloses them, so inline_sites() leaves them out"
-            )
-        if self.thread_local_records:
-            out.append(
-                f"{self.thread_local_records} thread-local record(s) "
-                f"(S_GTHREAD32/S_LTHREAD32) are present; they are reported by "
-                f"thread_locals() and deliberately not by data_symbols(), "
-                f"because their segment:offset addresses the TLS "
-                f"initialisation template rather than the variable, which has "
-                f"no address in the image at all"
             )
         if self.line_bytes and not self.has_string_table:
             out.append(

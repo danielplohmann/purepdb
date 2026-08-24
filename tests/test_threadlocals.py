@@ -174,14 +174,23 @@ def test_one_name_at_one_offset_in_two_segments_is_two_symbols():
     assert sorted(t.template_rva or 0 for t in found) == [0x1010, 0x4010]
 
 
-def test_the_diagnostic_explains_a_data_listing_that_omits_them():
+def test_the_record_count_explains_a_data_listing_that_omits_them():
+    """The count carries the explanation; `warnings` deliberately does not.
+
+    `data_symbols()` omits these on purpose, and that omission still has to be
+    explicable -- but a binary using thread-local storage is an ordinary
+    binary, and `warnings` is where deficiencies go. It fired for every
+    TLS-using file until issue #45, including under `purepdb thread`, where it
+    reported that a listing the caller did not ask for omits them.
+    """
     pdb = _pdb(thread32("tls_counter", 2, 0x10))
     d = pdb.diagnose()
+
     assert d.thread_local_records == 1
-    assert any("thread-local" in w and "data_symbols()" in w for w in d.warnings)
+    assert not any("thread-local" in w for w in d.warnings), d.warnings
 
 
-def test_no_thread_local_warning_when_the_file_has_none():
+def test_a_file_with_none_reports_none():
     d = _pdb(gdata32("plain", 1, 0x20)).diagnose()
     assert d.thread_local_records == 0
     assert not any("thread-local" in w for w in d.warnings)
