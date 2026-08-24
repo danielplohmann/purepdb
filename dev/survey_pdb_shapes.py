@@ -53,6 +53,9 @@ from purepdb.msf import BIG_MSF_MAGIC, MsfError, MsfFile
 # The shape this exists to find.
 WANTED = "slot 10, NO slot 5"
 
+# The other shape worth a shout, for a different reason: see `shape_of`.
+NO_SLOT_5 = "no section headers (slot 5 absent)"
+
 
 # Enough of a non-MSF file for purepdb to recognise and name the format.
 _PEEK = 1 << 20
@@ -127,7 +130,14 @@ def shape_of(msf: MsfFile) -> tuple[str, int]:
         return "map, no slot 10", entries
     if slot10:
         return "slot 10, no map", entries
-    return "no map, no slot 10", entries
+    if not slot5:
+        # Also worth finding, and separately: every slot-5-less PDB this project
+        # tests against was made by clearing the slot in a copy. A file a
+        # toolchain genuinely emitted that way would confirm the reconstruction
+        # is reconstructing something real. Reported apart from the shape above
+        # because it is a different question with a different answer.
+        return NO_SLOT_5, entries
+    return "ordinary (slot 5, no map)", entries
 
 
 @contextlib.contextmanager
@@ -188,7 +198,7 @@ def main(argv: list[str]) -> int:
             continue
 
         shapes[shape] += 1
-        if shape == WANTED:
+        if shape in (WANTED, NO_SLOT_5):
             record = {"path": str(path), "omap_entries": entries}
             hits.append(record)
             print(f"HIT  {path}  ({entries} omap entries)")
@@ -208,8 +218,9 @@ def main(argv: list[str]) -> int:
         print(f"\nwrote {len(hits)} hit(s) to {args.json}")
 
     if not hits:
-        print(f"\nno file carried '{WANTED}'. That is the result so far on every "
-              f"corpus tried;\nsee docs/omap.md and issue 25.")
+        print(f"\nno file carried '{WANTED}' or '{NO_SLOT_5}'. That is the "
+              f"result so far on\nevery corpus tried; see docs/omap.md and "
+              f"issue 25.")
     return 0
 
 
