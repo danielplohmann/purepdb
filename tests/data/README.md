@@ -186,10 +186,41 @@ table, no malformed records, no truncations. So it is a real test of OMAP
 *parsing* and of the map-without-slot-10 warning, and no test at all of the
 slot-10 branch — the one that changes an address.
 
-**The slot-10 branch therefore stays synthetic**, and nothing public appears
-to write slot 10. Closing it needs either a producer that does, or a file
-fetched rather than committed — which belongs in `dev/`, beside the
-llvm-pdbutil cross-check, and not in this directory.
+**The slot-10 branch therefore stays synthetic here**, and nothing public
+appears to write slot 10.
+
+It is no longer unverified, though. `dev/validate_omap_against_windows.py`
+checks purepdb's translation against Windows system binaries the developer
+already has, fetching the matching PDBs from Microsoft's symbol server into an
+untracked cache — so nothing is redistributed and nothing needs committing. The
+oracle is the export table, which the linker wrote in the shipped image's own
+address space and which owes nothing to the PDB.
+
+Six pairs from a Windows XP and a Windows 7 installation, all six carrying
+slot 10:
+
+| pair | omap | exports compared | exact | via one thunk | near | far |
+|---|---:|---:|---:|---:|---:|---:|
+| winxp ntdll | 37061 | 1294 | 1292 | 0 | 1 | 1 |
+| winxp kernel32 | 42229 | 915 | 910 | 0 | 2 | 3 |
+| win7-x86 ntdll | 67696 | 2000 | 1994 | 4 | 1 | 1 |
+| win7-x86 kernel32 | 60037 | 1273 | 851 | 7 | 233 | 182 |
+| win7-x64 ntdll | 84434 | 1961 | 1961 | 0 | 0 | 0 |
+| win7-x64 kernel32 | 70894 | 1287 | 870 | 139 | 166 | 112 |
+
+`ntdll` agrees on 99.8% to 100% of its exports on all three targets, and **0 of
+8730 exports match the untranslated address** — which is the counterfactual
+that gives the rest its meaning. kernel32's residue is not disagreement about
+addresses but about which address a name belongs to: Win7 exports it through
+stubs, and the offsets cluster hard (146 at exactly +8 on x64, 175 at exactly
++13 on x86). A wrong translation does not produce the same delta 175 times.
+
+Two things that fell out of running it. **Win7 is still BBT-processed** — the
+era was an open question, and all six of its PDBs carry slot 10. And x86
+publics are stdcall-decorated where exports are not, so the comparison has to
+undecorate `_NtCreateFile@44` before the two sets intersect at all; without
+that step the check silently compares almost nothing, which is the failure mode
+it now guards against.
 
 Keep fixtures small, and record the toolchain here — a fixture whose
 provenance is unclear cannot stay in a public repository.

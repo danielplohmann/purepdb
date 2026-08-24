@@ -2,6 +2,7 @@
 # run, which therefore has to be in the repository.
 dev/*
 !dev/validate_against_llvm.py
+!dev/validate_omap_against_windows.py
 HANDOFF.md
 __pycache__/
 *.py[cod]

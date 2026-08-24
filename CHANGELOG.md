@@ -16,6 +16,13 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Added
 
+- `dev/validate_omap_against_windows.py`, which checks OMAP translation against
+  Windows system binaries and the PDBs Microsoft's symbol server has for them.
+  Nothing is redistributed: the images are the developer's own and the symbols
+  land in an untracked cache. The oracle is the export table, which is written
+  in the shipped image's address space and owes nothing to the PDB. On six pairs
+  from XP and Win7, `ntdll` agrees on 99.8%–100% of its exports and **0 of 8730
+  match the untranslated address**.
 - OMAP translation is now checked against moved code rather than against
   arithmetic. `tests/_relink.py` and `tools/relink_omap.py` move the function
   bodies in a copy of one of our own fixtures and write the tables that describe
