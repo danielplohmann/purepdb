@@ -268,6 +268,22 @@ anything other than `PdbError` escapes -- the contract a caller writes
 and a longer one nightly with a rotating seed; a failing input is saved and
 uploaded as an artefact so it can be replayed.
 
+## Notes
+
+[`docs/`](docs/) carries three write-ups of what was learned building this,
+each figure measured against a fixture in the repository:
+
+* [OMAP and the two address spaces](docs/omap.md) — Optional Debug Header slot
+  10, the one place in this format where a missing stream gives *wrong*
+  addresses rather than missing ones. On six Windows pairs, 0 of 8730 exports
+  match the untranslated address.
+* [Reading real PDBs](docs/reading-real-pdbs.md) — the publics stream that holds
+  no publics, a function flag that is unreliable across linkers, symbols
+  described twice by two streams, and why an empty result is the normal failure
+  mode.
+* [Knowing a parser is right](docs/validating.md) — the five independent checks
+  behind those claims, and the two ways a test passes while asserting nothing.
+
 ## Releasing
 
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html),

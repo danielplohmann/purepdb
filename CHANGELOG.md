@@ -16,6 +16,11 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Added
 
+- `docs/`: three write-ups of what building this taught, each figure measured
+  against a committed fixture. `omap.md` on Optional Debug Header slot 10 and the
+  one place a missing stream gives wrong addresses rather than missing ones;
+  `reading-real-pdbs.md` on what real files do that the format documentation does
+  not say; `validating.md` on how any of it is known.
 - `dev/validate_omap_against_windows.py`, which checks OMAP translation against
   Windows system binaries and the PDBs Microsoft's symbol server has for them.
   Nothing is redistributed: the images are the developer's own and the symbols

@@ -47,20 +47,36 @@ purepdb/            # the package (stdlib only, no runtime deps)
   c13.py            #   C13 subsections: DEBUG_S_LINES / DEBUG_S_FILECHECKSUMS
   ipi.py            #   IPI stream (index 4), read only for the names inlinees refer to by id
   __main__.py       #   CLI: 15 subcommands, dispatched from one table
+docs/               # write-ups; every figure in them is measured (see below)
 tests/              # pytest suite
   _synth.py         #   MSF/PDB byte-stream builders, independent of the reader
   _pe.py            #   stdlib-only PE reader; never consults the PDB (that is the point)
+  _relink.py        #   moves code in a fixture and writes the OMAP that says so
   data/             #   groundtruth fixtures — in the repo, excluded from sdist/wheel
 tools/fuzz.py       # the parse-boundary fuzzer; runs outside pytest
-dev/                # scratch, EXCEPT validate_against_llvm.py (see below)
+tools/relink_omap.py  # CLI over tests/_relink.py
+dev/                # scratch, EXCEPT two validate_* scripts (see below)
 .github/workflows/  # ci.yml, fuzz.yml, release.yml
 ```
 
-`dev/` is a scratch directory with one tracked exception: `.gitignore` holds
-`dev/*` plus `!dev/validate_against_llvm.py`, because a CI job has to be able
-to run that script. Anything else you drop in `dev/` is ignored — which has
+`dev/` is a scratch directory with two tracked exceptions: `.gitignore` holds
+`dev/*` plus a negation for `validate_against_llvm.py` and
+`validate_omap_against_windows.py`, because a CI job has to be able to run the
+first and the second is a documented check.
+
+**Nothing else in `dev/` may be committed, and that matters here.**
+`validate_omap_against_windows.py` caches PDBs fetched from Microsoft's symbol
+server into `dev/symbols/`, which are not redistributable. The `dev/*` pattern
+is what keeps them out of the repository; do not weaken it. Anything else you drop in `dev/` is ignored — which has
 surprised people, so check `git status` rather than assuming a new file there
 is staged. The directory is still excluded from the sdist.
+
+`docs/` holds three documents whose claims are all measured against committed
+fixtures: `omap.md`, `reading-real-pdbs.md` and `validating.md`. **A change that
+moves a number they cite has to update them in the same commit** — a measured
+figure that has quietly stopped being true is worse than no figure, and these
+are the project's public claims. `docs/README.md` says what the numbers are
+scoped to.
 
 ## Environment Setup
 
@@ -99,6 +115,7 @@ activate it first and drop the override):
 | Publish (manual only) | `make publish` / `make publish-test` |
 | CLI | `.venv/bin/purepdb <command> <file.pdb>` — `purepdb --help` lists all 15 |
 | llvm cross-check | `.venv/bin/python dev/validate_against_llvm.py` (needs `llvm-pdbutil`; skips cleanly without it) |
+| OMAP vs Windows | `.venv/bin/python dev/validate_omap_against_windows.py <dll-dir> --fetch` (needs Windows DLLs and network; nothing is redistributed) |
 
 Expected state on a clean tree: **566 tests pass**, `ruff check` and `ty check`
 both clean, and the fuzzer reports no escaped exception. Run tests, lint *and*
