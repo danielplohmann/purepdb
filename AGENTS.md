@@ -277,6 +277,12 @@ token or a Trusted Publisher, which is a maintainer decision.
 - PR titles are **not** CI-enforced here; there is no semantic-title workflow.
   Descriptive prose in the same voice as the commit messages is the convention.
 - Update `CHANGELOG.md` under `## [Unreleased]` for any user-visible change.
+- **Never write `#<number>` after a closing keyword, even to negate it.** GitHub
+  reads `close #25` as an instruction and ignores the `does not` in front of it,
+  so a commit message saying a change *does not* close an issue closes it on
+  push. This has happened twice here, to the same issue. Write "issue 25" in
+  prose when the sentence is about not closing something; a bare `#25` elsewhere
+  in the message is fine and only links.
 - Never commit secrets or keys. Do not force-push shared branches.
 
 ## Gotchas
