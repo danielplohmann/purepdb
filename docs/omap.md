@@ -109,9 +109,15 @@ at all, and 0x8b40 past the right answer. A naive implementation would report it
 as fact.
 
 The map describes where *code* went. Section boundaries are not code, and
-nothing obliges them to appear in it. Whatever the right algorithm is, it needs
-a real file to check against rather than reasoning — which is why purepdb does
-not do this yet, and why [#39][i39] tracks it rather than guessing.
+nothing obliges them to appear in it.
+
+purepdb does not translate the section table, and after [#39][i39] that is a
+decision rather than a gap. The case for doing it rests on the shape where slot
+10 is present and slot 5 is absent, so that the pre-BBT table is the only one a
+caller can display — and that shape has not been observed in any of the nineteen
+files measured here. Building a translation nobody can exercise, on an algorithm
+whose obvious form is measurably wrong, would trade a correct warning for a
+plausible answer. The warning is the answer.
 
 ## Which files have it
 
