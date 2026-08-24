@@ -446,8 +446,14 @@ test and no failure. Do not "simplify" it back to a derived list.
   the names inlined bodies refer to by item id (`LF_FUNC_ID`, `LF_MFUNC_ID`,
   `LF_STRING_ID`). Do not start decoding the type graph as a side effect of
   something else.
-- **Names come back raw.** Demangling is deliberately not implemented (see
-  issue #30). Do not add it incidentally.
+- **Names come back raw**, and that is settled rather than pending. Demangling
+  was declined in issue 30: `compile_info()` reports each module's source
+  language, which is the part purepdb should own — a consumer then knows which
+  demangler applies. Implementing one here would mean a dependency or a few
+  thousand lines, against a `NOTICE` that rejects every alternative parser for
+  its dependency chain. If it ever arrives it belongs in a separate package,
+  consumed as an optional CLI extra, with the library still returning raw
+  names. Do not add it incidentally.
 - **`/DEBUG:FASTLINK` PDBs carry no procedure records at all.** Publics still
   work, and `diagnose()` says so. An empty proc list on such a file is correct
   behaviour, not a bug to chase.
