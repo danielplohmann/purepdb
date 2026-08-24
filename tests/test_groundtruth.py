@@ -46,6 +46,18 @@ CASES = [
                  0x014C, 2, 2, 5, 6, 1, id="rustpe-i686"),
 ]
 
+# The same i686 fixture with Optional Debug Header slot 5 cleared, so its
+# addresses come from the DBI Section Map instead of a section-header table
+# (issue #25). Every count and every RVA must match the original, which is
+# what makes it a check rather than a second set of numbers -- but it has no
+# section table of its own, so `test_section_table_matches_the_image` takes
+# `CASES` alone while the other two take both.
+NO_SECTION_HEADER_CASES = [
+    pytest.param("rustpe32/rust_pe_symbols_i686_no_slot5.pdb",
+                 "rustpe32/rust_pe_symbols_i686.exe",
+                 0x014C, 2, 2, 5, 6, 1, id="rustpe-i686-no-slot5"),
+]
+
 
 def _load(pdb_rel, image_rel):
     pdb_path, image_path = DATA / pdb_rel, DATA / image_rel
@@ -57,7 +69,7 @@ def _load(pdb_rel, image_rel):
 
 @pytest.mark.parametrize(
     "pdb_rel,image_rel,machine,n_sections,n_procs,n_publics,n_functions,n_aliased",
-    CASES)
+    CASES + NO_SECTION_HEADER_CASES)
 def test_counts_are_stable(pdb_rel, image_rel, machine, n_sections, n_procs,
                            n_publics, n_functions, n_aliased):
     pdb, _image = _load(pdb_rel, image_rel)
@@ -90,7 +102,7 @@ def test_section_table_matches_the_image(pdb_rel, image_rel, machine,
 
 @pytest.mark.parametrize(
     "pdb_rel,image_rel,machine,n_sections,n_procs,n_publics,n_functions,n_aliased",
-    CASES)
+    CASES + NO_SECTION_HEADER_CASES)
 def test_every_function_lands_in_executable_code(pdb_rel, image_rel, machine,
                                                  n_sections, n_procs,
                                                  n_publics, n_functions,
@@ -148,34 +160,6 @@ def _follow_jmp(data: bytes, image: PeImage, rva: int) -> int | None:
         return None
     (delta,) = struct.unpack_from("<i", data, offset + 1)
     return rva + 5 + delta
-
-
-@pytest.mark.parametrize(
-    "pdb_rel,image_rel,machine,n_sections,n_procs,n_publics,n_functions,n_aliased",
-    [pytest.param("rustpe32/rust_pe_symbols_i686_no_slot5.pdb",
-                  "rustpe32/rust_pe_symbols_i686.exe",
-                  0x014C, 2, 2, 5, 6, 1, id="rustpe-i686-no-slot5")])
-def test_counts_are_stable_without_section_headers(pdb_rel, image_rel, machine,
-                                                   n_sections, n_procs,
-                                                   n_publics, n_functions,
-                                                   n_aliased):
-    """Groundtruth counts for ``rustpe32/rust_pe_symbols_i686_no_slot5.pdb``."""
-    test_counts_are_stable(pdb_rel, image_rel, machine, n_sections, n_procs,
-                           n_publics, n_functions, n_aliased)
-
-
-@pytest.mark.parametrize(
-    "pdb_rel,image_rel,machine,n_sections,n_procs,n_publics,n_functions,n_aliased",
-    [pytest.param("rustpe32/rust_pe_symbols_i686_no_slot5.pdb",
-                  "rustpe32/rust_pe_symbols_i686.exe",
-                  0x014C, 2, 2, 5, 6, 1, id="rustpe-i686-no-slot5")])
-def test_every_function_lands_in_executable_code_without_section_headers(
-        pdb_rel, image_rel, machine, n_sections, n_procs, n_publics,
-        n_functions, n_aliased):
-    """RVA resolution from the Section Map must still hit executable sections."""
-    test_every_function_lands_in_executable_code(
-        pdb_rel, image_rel, machine, n_sections, n_procs, n_publics,
-        n_functions, n_aliased)
 
 
 @pytest.mark.parametrize("pdb_rel,image_rel,strict,relaxed", [
