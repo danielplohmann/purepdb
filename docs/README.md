@@ -14,7 +14,7 @@ individual implementations rather than anywhere a reader can find it.
 | --- | --- |
 | [`omap.md`](omap.md) | OMAP, Optional Debug Header slot 10, and the one place in the format where a missing stream gives wrong answers rather than missing ones |
 | [`reading-real-pdbs.md`](reading-real-pdbs.md) | Field notes: unreliable flags, symbols described twice, one address with several correct names, and why an empty result is the normal failure mode |
-| [`validating.md`](validating.md) | How the claims here were checked, and the two ways a test can pass while asserting nothing |
+| [`validating.md`](validating.md) | How the claims here were checked — six independent checks, and the two ways a test can pass while asserting nothing |
 
 ## On the numbers
 
@@ -33,6 +33,11 @@ Where something was not tested, these documents say so rather than generalising.
 
 Nothing here is a novelty claim. It is a record of what was measured, in enough
 detail to be re-run and contradicted.
+
+Some of it was measured against files that cannot be shipped — Windows system
+binaries and a corpus of assorted real PDBs — using the scripts in `dev/`.
+Those numbers are reproducible by anyone with their own corpus, which is the
+most that can be offered when the input is not redistributable.
 
 [llvm]: https://llvm.org/docs/PDB/
 [mspdb]: https://github.com/microsoft/microsoft-pdb

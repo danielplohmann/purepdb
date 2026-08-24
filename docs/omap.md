@@ -156,9 +156,32 @@ roughly seventy real system PDBs a second, so a bag of ten thousand is a couple
 of minutes.
 
 A single hit would be worth having even if the file itself could not be
-committed. It would establish that the shape exists, which is precisely what
-nineteen files have so far failed to do, and it would reopen the question issue
-39 closed.
+committed. It would establish that the shape exists, and nothing has.
+
+### Why it probably cannot exist
+
+The sweep has now run over every corpus available: the fixtures, eighteen
+Windows system PDBs spanning XP, 7, 10 and 11, and 2.5 GB of assorted real
+PDBs — among them some of the largest and oldest on VirusTotal, and a good
+deal of Roslyn output. **Zero of 64 files carried slot 10 without slot 5.**
+
+That is worth more than a null result, because the two conditions turn out to
+pull against each other:
+
+* **Slot 10 and a map** mean the file was BBT-processed, which means Microsoft,
+  and the era measurements put that between roughly XP and Windows 7.
+* **No slot 5** means a linker that did not write a section-header stream.
+
+But BBT ran on binaries produced by the same toolchain that always writes slot
+5 — every one of the eighteen Windows pairs carries both — and a linker old
+enough to omit slot 5 predates BBT. The combination is not merely rare; there
+is no producer in that intersection.
+
+So issue 25 was closed on this reasoning rather than left open indefinitely.
+purepdb still handles the case, and `diagnose()` still warns about it, because
+the code paths compose that way and costing nothing to keep correct is
+different from being worth hunting for. If a file ever turns up, the sweep
+costs a tenth of a second over 2.5 GB, and the question reopens.
 
 ### The era question, answered
 

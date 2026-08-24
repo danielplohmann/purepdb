@@ -179,6 +179,30 @@ warnings — and the rule that follows from it is that **a code path which can
 silently yield nothing needs a matching diagnostic**, or the parser has a gap
 with no way to see it.
 
+## Managed PDBs are common, and they are a different animal
+
+Two things get called a .NET PDB and only one of them is a PDB in this format's
+sense. A **Portable PDB** is ECMA-335 metadata with a `BSJB` magic — not an MSF
+container at all, and nothing here reads it. But a **managed MSF PDB** is a
+normal container whose contents are not:
+
+* procedures are `S_GMANPROC`/`S_LMANPROC`, keyed by metadata token rather than
+  `segment:offset`, so there is no address to resolve;
+* the symbol-record stream holds `S_PROCREF` and token references and **no
+  `S_PUB32` at all**;
+* so both `functions()` and `public_symbols()` come back empty on a file that is
+  full of perfectly good symbols.
+
+This is not a rarity to guard against as an afterthought. In a corpus of 2.5 GB
+of assorted real PDBs, **16 of 39 were managed** — the single largest category.
+Any tool that sweeps files it did not choose will meet them constantly, and
+"empty" is the answer it will get unless it checks why.
+
+`diagnose()` detects the shape and says so. It is also where this project learnt
+that one detected condition should not produce several warnings: a managed PDB
+used to collect three, two of them consequences of the first, which is the
+subject of issue 47.
+
 ## The producer will tell you what it is
 
 `S_COMPILE3` states the source language, the target CPU and the compiler's own

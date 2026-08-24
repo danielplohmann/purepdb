@@ -134,6 +134,44 @@ produces. It was found by auditing fixed-size reads for one whose length comes
 from the file. **Fuzzing covers the reachable space, not the narrow one**, and an
 audit of a specific shape is a different tool.
 
+## 6. A corpus of real files, read all the way through
+
+The five checks above are all *closed*: they test what the fixtures contain and
+what the harness generates. They cannot find a shape nobody thought to build.
+
+`dev/audit_corpus.py` drives the whole parser over every file in a directory and
+reports what it could not do — files refused and why, `diagnose()` warnings
+tallied by kind, malformed records, truncations, and a histogram of record kinds
+seen in module streams that purepdb does not decode. That last one is a map of
+the gaps measured against real files rather than against a reading of
+`cvinfo.h`.
+
+Run over 2.5 GB of assorted PDBs, the reassuring part was that 39 files parsed
+with **no malformed records, no truncated streams, and nothing but `PdbError`
+escaping**, across 2.2M functions and 5.9M line entries. The parse-boundary
+contract holds on real input and not only on fuzzed input, which fuzzing alone
+cannot tell you.
+
+The valuable part was the two things it found that **no fixture could**:
+
+* A stream directory whose block map spanned two blocks. purepdb rejected a
+  valid 127 MB PDB outright — the worst failure mode it has, since it is not an
+  empty result with a diagnostic but a refusal. Every fixture in the repository
+  is small enough that its block map fits in one block, so no amount of
+  synthetic testing around the fixtures would have reached it.
+* A `diagnose()` warning that fires on 41% of real files with nothing wrong. All
+  seven fixtures agree on the two counts it compares, so the suite is blind to
+  it by construction.
+
+The lesson generalises past this project. A fixture corpus encodes the shapes
+you already know about; its blind spots are exactly the shapes you have not
+imagined, and those are where the remaining bugs are. Reading a few thousand
+real files is the cheapest way to be surprised.
+
+It is deliberately not part of the suite and not in CI. It needs a corpus nobody
+can redistribute, it takes minutes rather than seconds, and its output is a
+report to read rather than a pass or a fail.
+
 ## Two failure modes to watch for in your own tests
 
 Both of these bit this project, and both are invisible while they are happening.
@@ -168,6 +206,7 @@ other than "the code says so":
 | pinned counts | measured once, deliberately, and defended |
 | llvm cross-check | a different implementation |
 | fuzzing | a contract, not an expected value |
+| corpus audit | files nobody designed for the parser |
 | relinked OMAP | bytes that actually moved |
 | Windows OMAP check | a linker's own export table |
 
