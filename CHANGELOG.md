@@ -16,6 +16,12 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Added
 
+- A groundtruth fixture carrying a real OMAP table: `tests/data/syzygy/`,
+  output from Google's Syzygy `relink`, the only open-source tool that writes
+  one. 1228 entries, where every other OMAP test builds the table it reads.
+  Third-party material under the Apache License 2.0 — the first in this corpus,
+  attributed in `NOTICE`. It does not reach the Optional Debug Header slot 10
+  branch, which Syzygy never writes, so that one stays synthetic.
 - A `diagnose()` warning for a BBT-processed PDB that carries the pre-BBT
   section table (Optional Debug Header slot 10) and no section headers (slot 5).
   Symbol RVAs are final, post-BBT addresses, while the only section table left

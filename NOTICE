@@ -58,7 +58,22 @@ publics hash stream and so returned nothing on every real PDB — came from a
 downstream consumer's review, along with the measurements over several hundred
 PDBs that showed why publics matter more than their count suggests.
 
-Test fixtures under `tests/data/` are redistributable: sqlite3, whose source is
-public domain, built with MSVC; and a small Rust program of our own, built for
-`x86_64-pc-windows-msvc` and regenerable from the `main.rs` beside it. No
-licensed third-party binaries are redistributed with this project.
+Test fixtures under `tests/data/` are redistributable, and each one's licence
+is recorded in `tests/data/README.md`: sqlite3, whose source is public domain,
+built with MSVC; small Rust and C programs of our own, regenerable from the
+sources beside them; and one third-party binary pair, `syzygy/`, redistributed
+under the Apache License 2.0.
+
+Nothing here is redistributed without a licence that permits it. A binary whose
+licence does not — a PDB from a vendor symbol server, for instance — cannot be
+added to this corpus whatever it would demonstrate, and that has been declined
+once already.
+
+`syzygy/test_vtables_omap.dll{,.pdb}` are test data from Google's Syzygy
+project (https://github.com/google/syzygy), Copyright 2014 Google Inc.,
+licensed under the Apache License, Version 2.0:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+They are redistributed unmodified. Syzygy ships no NOTICE file, so there is
+none to reproduce here. The full licence text is available at the URL above.

@@ -545,3 +545,114 @@ def test_a_real_pdb_without_slot_5_reports_the_two_address_spaces():
     assert (d.has_original_sections, d.omap_entries, d.has_section_headers) \
         == (True, 1, False)
     assert any("not comparable" in w for w in d.warnings), d.warnings
+
+
+# --- a real address map, from a real OMAP producer ---------------------------
+
+SYZYGY = "syzygy/test_vtables_omap.dll.pdb"
+SYZYGY_IMAGE = "syzygy/test_vtables_omap.dll"
+
+
+def _data_path(rel):
+    """This file imports `Path` per test rather than at module scope; one
+    helper keeps that from being repeated four more times."""
+    from pathlib import Path
+
+    return Path(__file__).resolve().parent / "data" / rel
+
+
+def _syzygy():
+    path = _data_path(SYZYGY)
+    if not path.exists():
+        pytest.skip(f"groundtruth fixture missing: {SYZYGY}")
+    return PDB.open(str(path))
+
+
+def _syzygy_image():
+    from tests._pe import PeImage
+
+    path = _data_path(SYZYGY_IMAGE)
+    if not path.exists():
+        pytest.skip(f"groundtruth fixture missing: {SYZYGY_IMAGE}")
+    return PeImage.parse(path.read_bytes())
+
+
+def test_a_real_address_map_parses():
+    """Every other test in this file builds the OMAP table it reads.
+
+    This one does not: `syzygy/` is output from Syzygy's `relink`, the only
+    open-source tool that writes an address map, so the 1228 entries here are
+    a producer's and not ours. Pinned as a count, because a table this parser
+    stopped reading would come back empty rather than raising.
+    """
+    d = _syzygy().diagnose()
+
+    assert d.omap_entries == 1228
+    assert (d.proc_records, d.public_records) == (241, 956)
+    # Nothing about a real map should make the record walkers stumble.
+    assert (d.malformed_records, d.truncated_streams) == (0, 0)
+
+
+def test_a_real_map_without_slot_10_is_not_applied():
+    """Syzygy writes slots 3 and 4 and never slot 10, so there is no pre-link
+    address space to translate out of and the map must stay unapplied.
+
+    Until this fixture that clause was only ever exercised against a table
+    this suite wrote itself.
+    """
+    pdb = _syzygy()
+    d = pdb.diagnose()
+
+    assert d.omap_entries and not d.has_original_sections
+    assert d.has_section_headers
+    assert any("slot 10" in w and "not applied" in w for w in d.warnings), \
+        d.warnings
+    # Addresses come from the section headers, untranslated: .text at 0x1000.
+    assert pdb.sections[0].virtual_address == 0x1000
+    assert len(pdb.functions()) == 246
+
+
+def test_the_shipped_image_has_a_layout_the_pdb_does_not_describe():
+    """The reason this fixture is not in `test_groundtruth.py`'s `CASES`.
+
+    The PDB is what the linker wrote; the image is what `relink` shipped after
+    instrumenting it. So the two section tables are *expected* to disagree --
+    the image gained a `.syzygy` section and moved everything after `.rdata`
+    -- and the PE oracle cannot be pointed at this pair. Asserted rather than
+    left as a comment, because "these must agree" is the rule everywhere else
+    in this corpus and the exception needs to be visible.
+    """
+    pdb = _syzygy()
+    image = _syzygy_image()
+
+    from_pdb = [(s.name, s.virtual_address) for s in pdb.sections]
+    from_pe = [(s.name, s.virtual_address) for s in image.sections]
+    assert from_pdb != from_pe
+
+    assert ".syzygy" in {s.name for s in image.sections}
+    assert ".syzygy" not in {s.name for s in pdb.sections}
+    # `.data` is where the two diverge most plainly.
+    assert dict(from_pdb)[".data"] == 0x11000
+    assert dict(from_pe)[".data"] == 0x13000
+
+
+def test_two_publics_sit_in_text_the_shipped_image_no_longer_has():
+    """A consequence of the same divergence, pinned so it reads as expected.
+
+    The PDB's `.text` ends at 0xb196 and the shipped one at 0xb157, so these
+    two resolve inside the section the linker described and past the section
+    the image ships. They are addresses in a layout that no longer exists,
+    not parse errors.
+    """
+    pdb = _syzygy()
+    image = _syzygy_image()
+
+    outside = {f.name: f.rva for f in pdb.functions()
+               if f.rva is not None and image.section_of(f.rva) is None}
+    assert outside == {"_IsProcessorFeaturePresent@4": 0xb18a,
+                       "_RtlUnwind@16": 0xb190}
+
+    text_pdb = pdb.sections[0]
+    assert text_pdb.virtual_address + text_pdb.virtual_size == 0xb196
+    text_pe = image.sections[0]
+    assert text_pe.virtual_address + text_pe.virtual_size == 0xb157
