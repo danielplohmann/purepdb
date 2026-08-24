@@ -411,6 +411,7 @@ class Diagnostics:
                 f"{self.unplaced_inline_sites} inline site(s) have no address "
                 f"to report: their annotations describe no code, or no open "
                 f"procedure encloses them, so inline_sites() leaves them out"
+            )
         if self.thread_local_records:
             out.append(
                 f"{self.thread_local_records} thread-local record(s) "
