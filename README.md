@@ -141,8 +141,8 @@ sqlite3 x64's records come from 67 modules.
 section contributions, publics/symbol-record streams, optional debug header);
 CodeView `S_PUB32`, `S_GPROC32`/`S_LPROC32` (and `_ID` variants),
 `S_GDATA32`/`S_LDATA32`, `S_PROCREF`/`S_LPROCREF`, `S_CONSTANT`, `S_UDT`,
-`S_COMPILE3`,
-`S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary annotations;
+`S_COMPILE3`, `S_THUNK32`, `S_TRAMPOLINE`, `S_INLINESITE` with its binary
+annotations;
 section-header table for `segment:offset -> RVA`, with DBI's Section Map as the
 fallback when that table is absent; OMAP address translation for images whose
 code was moved after linking; the named stream map, the `/names` string table
