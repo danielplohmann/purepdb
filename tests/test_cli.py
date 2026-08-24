@@ -68,7 +68,13 @@ def _module_records() -> bytes:
 @pytest.fixture
 def sample(tmp_path):
     """A PDB with a proc, a public, a label, an inline site, a thunk, a
-    trampoline, a constant, a UDT, line info and two modules."""
+    trampoline, a constant, a UDT, line info and two modules.
+
+    Deliberately no thread-local record: one would make the thread-local
+    warning fire, and `test_records_go_to_stdout_and_counts_to_stderr` relies
+    on this sample producing no warnings at all. `thread` is covered against
+    the real `tls` fixture instead.
+    """
     raw_names, offsets = names_stream(["", "main.c"])
     checksums, entry_offsets = file_checksums([(offsets["main.c"], b"")])
     c13_region = (subsection(c13.DEBUG_S_FILECHECKSUMS, checksums)
@@ -164,6 +170,10 @@ UNLISTED = {
     "derived_sections": "printed by `sections` when it is the table in use",
     "original_sections": "printed by `sections` when it is the table in use",
     "omap": "an address map, not a listing; `diagnose` reports its size",
+    "compile_info": "two free-text fields -- the compiler version string and "
+                    "the module path -- so no column order leaves both "
+                    "parseable while the name stays last; wants a quoting "
+                    "convention first",
     "open": "constructor",
     "from_bytes": "constructor",
 }
@@ -180,6 +190,7 @@ def test_no_public_listing_on_pdb_is_missing_a_subcommand():
         "functions", "public_symbols", "data_symbols", "labels", "thunks",
         "trampolines", "inline_sites", "lines", "constants", "udts",
         "section_contributions", "sections", "info", "diagnose",
+        "thread_locals",
     }
     public = {name for name, value in vars(PDB).items()
               if not name.startswith("_")
@@ -211,7 +222,7 @@ def test_publics(sample, capsys):
 def test_data(sample, capsys):
     out, err = _run(capsys, "data", sample)
     assert out == ["0x00001800  global   g_page_cache"]
-    assert "1 data records" in err
+    assert "1 data symbols" in err
 
 
 def test_sections(sample, capsys):
@@ -298,7 +309,7 @@ def test_thunks(sample, capsys):
 
 
 def test_a_data_record_with_no_name_keeps_its_columns(tmp_path, capsys):
-    """87 of sqlite3 x64's 540 data records carry an empty name, and 151 of
+    """87 of sqlite3 x64's data symbols carry an empty name, and 151 of
     x86's 633 do, so this is most of a real listing rather than an edge: the
     line used to end after the scope column, one field short."""
     module_stream = module_sym_stream(gdata32("", 1, 0x800))
@@ -457,6 +468,12 @@ def test_records_go_to_stdout_and_counts_to_stderr(sample, capsys):
     """
     for name, (_handler, noun, _columns) in _COMMANDS.items():
         if noun is None:
+            continue
+        # `thread` is the one listing this sample cannot carry: a thread-local
+        # record makes `diagnose()` warn, and the last assertion below requires
+        # a warning-free file. Covered against the `tls` fixture in
+        # `test_thread_lists_the_tls_fixture` instead.
+        if name == "thread":
             continue
         out, err = _run(capsys, name, sample)
         assert out, f"{name} printed no records at all"
@@ -1009,3 +1026,24 @@ def test_an_unknown_command_is_escaped(capsys):
 
     err = capsys.readouterr().err
     assert "\x1b" not in err and "\r" not in err
+
+
+def test_thread_lists_the_tls_fixture(capsys):
+    """`thread` against real linker output, since the synthetic sample above
+    deliberately carries no thread-local record.
+
+    Four variables from six records, at their TLS template addresses. Pinned as
+    a count rather than a non-empty check, so a listing that stopped
+    deduplicating fails here as loudly as one that stopped reporting.
+    """
+    path = (Path(__file__).resolve().parent / "data" / "tls" / "tls_symbols.pdb")
+    if not path.exists():
+        pytest.skip("groundtruth fixture missing: tls")
+
+    out, err = _run(capsys, "thread", str(path))
+
+    assert len(out) == 4, out
+    assert all(re.match(r"^0x0000500[48c]|^0x00005010", line) for line in out), out
+    assert any("global" in line for line in out)
+    assert any("static" in line for line in out)
+    assert "4 thread-local variables" in "\n".join(err)

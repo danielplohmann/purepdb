@@ -126,6 +126,9 @@ def _diagnose(pdb: PDB) -> None:
     print(f"public records     : {d.public_records}")
     print(f"inline sites       : {d.inline_sites}")
     print(f"labels             : {d.labels}")
+    if d.thread_local_records:
+        print(f"thread-local recs  : {d.thread_local_records} "
+              f"(thread_locals(), not data_symbols())")
     print(f"line info          : {d.line_bytes} bytes"
           f"{'' if d.has_string_table else ', /names MISSING'}")
     print(f"section headers    : {'yes' if d.has_section_headers else 'NO'}")
@@ -165,16 +168,13 @@ def _publics(pdb: PDB) -> int:
 
 
 def _data(pdb: PDB) -> int:
-    """Data records, not distinct data symbols.
+    """Distinct data symbols, one line each.
 
-    `data_symbols()` reads the module streams and the symbol-record stream,
-    and a file-static symbol appears in both -- 633 records for 481 distinct
-    addresses on sqlite3 x86. The count says "records" rather than quietly
-    over-reporting how many symbols the file describes.
-
-    The noun is tied to that repetition: if `data_symbols()` ever deduplicates,
-    both it and the `_COMMANDS` entry below become wrong in the other
-    direction, under-claiming records for a listing that now holds symbols.
+    `data_symbols()` reads the module streams and the symbol-record stream, and
+    a file-static symbol is described by both -- 633 records for the 481 symbols
+    sqlite3 x86 actually holds. It deduplicates on name, segment, offset and
+    kind, so the count here is symbols rather than records, and `diagnose()` is
+    where the record count lives.
     """
     symbols = pdb.data_symbols()
     for d in symbols:
@@ -182,6 +182,22 @@ def _data(pdb: PDB) -> int:
         print(f"{_rva(pdb.to_rva(d.segment, d.offset))}  {scope:7s}  "
               f"{_text(d.name) or NO_NAME}")
     return len(symbols)
+
+
+def _thread(pdb: PDB) -> int:
+    """Thread-local variables, at their TLS template addresses.
+
+    The column is headed `template-rva` and not `rva` because that is what the
+    address is: where a new thread's copy is initialised *from*, not where any
+    variable lives. Pairing one with a `functions` rva compares two different
+    address spaces, so the header says so on every invocation.
+    """
+    locals_ = pdb.thread_locals()
+    for t in locals_:
+        scope = "global" if t.is_global else "static"
+        print(f"{_rva(t.template_rva)}  {scope:7s}  "
+              f"{_text(t.name) or NO_NAME}")
+    return len(locals_)
 
 
 def _sections(pdb: PDB) -> int:
@@ -290,7 +306,7 @@ _COMMANDS: dict[str, tuple[Callable[[PDB], int | None], str | None, str]] = {
                  "what the PDB contains, and why a listing is thin"),
     "functions": (_functions, "functions", "rva  source  size  aliases  name"),
     "publics": (_publics, "public symbols", "seg  off  kind  name"),
-    "data": (_data, "data records", "rva  scope  name"),
+    "data": (_data, "data symbols", "rva  scope  name"),
     "labels": (_labels, "labels", "rva  name"),
     "thunks": (_thunks, "thunks", "rva  size  ordinal  name"),
     "trampolines": (_trampolines, "trampolines", "rva  size  -> target rva"),
@@ -299,6 +315,8 @@ _COMMANDS: dict[str, tuple[Callable[[PDB], int | None], str | None, str]] = {
     "constants": (_constants, "constants", "value  name"),
     "udts": (_udts, "type names", "type-index  name"),
     "modules": (_modules, "modules", "contributions  module"),
+    "thread": (_thread, "thread-local variables",
+               "template-rva  scope  name"),
     "sections": (_sections, "sections", "rva  size  executable  name"),
 }
 
