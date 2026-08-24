@@ -137,6 +137,29 @@ public symbol server and are **not redistributable**. So the shape can be
 checked but not committed, which is the whole reason this document exists rather
 than a fixture.
 
+### Looking for it in a corpus
+
+`dev/survey_pdb_shapes.py` sweeps a directory for these shapes, and finding
+`slot 10, NO slot 5` is what it exists for. Two things make it cheap:
+
+**No binaries are needed.** Which shape a file has is decided by the Optional
+Debug Header alone, so nothing has to be paired with an image. That matters,
+because a PDB cannot practically be turned back into its image anyway — the
+symbol server keys binaries on `TimeDateStamp` and `SizeOfImage`, and while
+`SizeOfImage` is derivable from the section table (on Win7 x64 `ntdll` the
+rounded last-section end is `0x1a9000`, exactly what the image records),
+`TimeDateStamp` is not in the PDB at all. The PDB's signature is its own
+creation time, 13779 seconds off the image's on that file. Half a key is no key.
+
+**It reads only the header**, not every module stream as `diagnose()` does —
+roughly seventy real system PDBs a second, so a bag of ten thousand is a couple
+of minutes.
+
+A single hit would be worth having even if the file itself could not be
+committed. It would establish that the shape exists, which is precisely what
+nineteen files have so far failed to do, and it would reopen the question issue
+39 closed.
+
 ### The era question, answered
 
 BBT is not an XP-era artefact, and it is not a current practice either. It
