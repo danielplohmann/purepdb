@@ -15,6 +15,7 @@ skips when they are absent.
 | `sqlite/x64/sqlite3.{dll,pdb}` | MSVC `link.exe`, VS2019-era, x64 | 3522 procs, 660 publics, 277 exports, C++ decorated aliases |
 | `rustpe/rust_pe_symbols_msvc.{exe,pdb}` | `rust-lld`, rustc 1.97.1, x64 | 248 procs, 451 publics, EH funclets, and 143 code publics with the function flag *clear* |
 | `rustpe32/rust_pe_symbols_i686.{exe,pdb}` | `rust-lld`, rustc 1.94.1, i686 | 2 procs, 5 publics, 13 inline sites, and 4 code publics with the flag clear — the `code_publics` rule at 32 bits |
+| `rustpe32/rust_pe_symbols_i686_no_slot5.pdb` | `rustpe32/` with slot 5 cleared | same counts and RVAs as `rustpe32/`; Section Map fallback on a committed file (issue #25) |
 
 The rustpe fixtures are the ones that pin the `code_publics` rule: `link.exe`
 sets `PUBLIC_FLAG_FUNCTION` on every code public, `rust-lld` does not, and
@@ -60,21 +61,26 @@ clang — no Microsoft-licensed material is involved. **It is not runnable**: th
 stubs return constants. It exists to be parsed. `hash_round` and `mix_pair` are
 `#[inline(always)]`, which is where its 13 inline sites come from.
 
+**rust_pe_symbols_i686_no_slot5** — `rustpe32/rust_pe_symbols_i686.pdb` with
+Optional Debug Header slot 5 cleared. The companion image is
+`rustpe32/rust_pe_symbols_i686.exe`. No toolchain available here emits a PDB
+without slot 5 at link time; this is the committed substitute for issue #25.
+
 ## Adding to this set
 
-The shapes that once needed a fixture are now covered, two of them without one:
+The shapes that once needed a fixture, and the one still open:
 
 * **32-bit rust-lld** — `rustpe32/`, above.
-* **No section-header stream** — covered by deriving it. `test_sectionmap.py`
-  clears Optional Debug Header slot 5 in a byte copy of each real PDB and
-  requires every function to come back at the address it had before, resolved
-  from the DBI Section Map instead. A PDB a toolchain genuinely emitted that
-  way would still be worth having, to confirm such files look like these.
-* **OMAP tables** — likewise derived. `test_omap.py` re-serialises a real PDB
-  with an address map and an original section table added, so the container,
-  the DBI stream and every symbol record are real and only the tables are
-  ours. BBT is not publicly available, so a genuinely BBT-processed PDB from a
-  vendor symbol server remains the one shape no test here has seen.
+* **No section-header stream** — `rustpe32/rust_pe_symbols_i686_no_slot5.pdb`,
+  above, plus the runtime derivation in `test_sectionmap.py` on every other
+  fixture.
+* **OMAP tables** — still derived, not committed. `test_omap.py` re-serialises
+  a real PDB with an address map and an original section table added, so the
+  container, the DBI stream and every symbol record are real and only the
+  tables are ours. BBT is not publicly available, and a vendor symbol-server
+  PDB is not redistributable, so a genuinely BBT-processed file remains the one
+  shape no test here has seen. See issue #25: fetching one at test time belongs
+  in `dev/`, beside the llvm-pdbutil cross-check, rather than in this directory.
 
 Keep fixtures small, keep them own builds or public-domain sources, and record
 the toolchain here — a fixture whose provenance is unclear cannot stay in a

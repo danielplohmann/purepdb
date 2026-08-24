@@ -150,6 +150,34 @@ def _follow_jmp(data: bytes, image: PeImage, rva: int) -> int | None:
     return rva + 5 + delta
 
 
+@pytest.mark.parametrize(
+    "pdb_rel,image_rel,machine,n_sections,n_procs,n_publics,n_functions,n_aliased",
+    [pytest.param("rustpe32/rust_pe_symbols_i686_no_slot5.pdb",
+                  "rustpe32/rust_pe_symbols_i686.exe",
+                  0x014C, 2, 2, 5, 6, 1, id="rustpe-i686-no-slot5")])
+def test_counts_are_stable_without_section_headers(pdb_rel, image_rel, machine,
+                                                   n_sections, n_procs,
+                                                   n_publics, n_functions,
+                                                   n_aliased):
+    """Groundtruth counts for ``rustpe32/rust_pe_symbols_i686_no_slot5.pdb``."""
+    test_counts_are_stable(pdb_rel, image_rel, machine, n_sections, n_procs,
+                           n_publics, n_functions, n_aliased)
+
+
+@pytest.mark.parametrize(
+    "pdb_rel,image_rel,machine,n_sections,n_procs,n_publics,n_functions,n_aliased",
+    [pytest.param("rustpe32/rust_pe_symbols_i686_no_slot5.pdb",
+                  "rustpe32/rust_pe_symbols_i686.exe",
+                  0x014C, 2, 2, 5, 6, 1, id="rustpe-i686-no-slot5")])
+def test_every_function_lands_in_executable_code_without_section_headers(
+        pdb_rel, image_rel, machine, n_sections, n_procs, n_publics,
+        n_functions, n_aliased):
+    """RVA resolution from the Section Map must still hit executable sections."""
+    test_every_function_lands_in_executable_code(
+        pdb_rel, image_rel, machine, n_sections, n_procs, n_publics,
+        n_functions, n_aliased)
+
+
 @pytest.mark.parametrize("pdb_rel,image_rel,strict,relaxed", [
     pytest.param("sqlite/x86/sqlite3.pdb", "sqlite/x86/sqlite3.dll",
                  3620, 3620, id="sqlite-x86"),
