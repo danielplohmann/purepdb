@@ -43,8 +43,10 @@ number that looks exactly like an RVA.
 
 On Win7 x64 `ntdll`, **1961 of 1961 exported functions land at a different
 address after translation than before it**. Not a subset — every single one.
-Across all six pairs measured, **0 of 8730 exports match the untranslated
-address**.
+Across the six map-bearing pairs measured, **0 of 8730 exports match the
+untranslated address**. (Only pairs that carry a map count toward that: a file
+with no map has nothing to leave untranslated, and including the eight modern
+pairs would inflate the number to 21790 while proving nothing.)
 
 That is the number worth remembering. A consumer that skips OMAP does not get a
 slightly worse answer on a BBT-processed file; it gets an answer where nothing
@@ -68,6 +70,17 @@ That ordering matters, and the two halves have to be present together:
   spaces. This is the case in [issue #39][i39], and `diagnose()` warns.
 - **Both tables and the map.** The ordinary BBT shape, and the one where
   everything works. `diagnose()` stays silent.
+
+Of those four, only three have ever been seen in a real file. Across nineteen —
+eighteen Windows pairs spanning XP, 7, 10 and 11 on both architectures, and
+Syzygy's own test data — the shapes observed are *both tables with a map* (6),
+*a map without slot 10* (Syzygy, 1), and *no map at all* (12). **Slot 10 without
+slot 5 has not been observed once.**
+
+That matters for how much weight to put on it. The case is real in the sense that
+the code paths compose that way, and purepdb warns about it; whether any producer
+emits it is a different question, and the answer so far is that none of the ones
+reachable here does.
 
 ## Translating the section table is harder than it looks
 
@@ -120,20 +133,47 @@ than a fixture.
 
 ### The era question, answered
 
-It is easy to assume BBT is an XP-era artefact. It is not: **every Win7 SP1 PDB
-measured carries slot 10**, and Win7 x64 `ntdll` has the largest map of the set
-at 84434 entries — more than double XP's `ntdll`.
+BBT is not an XP-era artefact, and it is not a current practice either. It
+stopped, and the window can be dated from the binaries themselves:
 
-| pair | omap entries | slot 10 |
-| --- | ---: | :---: |
-| winxp `ntdll` | 37061 | yes |
-| winxp `kernel32` | 42229 | yes |
-| win7-x86 `ntdll` | 67696 | yes |
-| win7-x86 `kernel32` | 60037 | yes |
-| win7-x64 `ntdll` | 84434 | yes |
-| win7-x64 `kernel32` | 70894 | yes |
+| pair | omap entries | slot 10 | slot 5 |
+| --- | ---: | :---: | :---: |
+| winxp `ntdll` | 37061 | yes | yes |
+| winxp `kernel32` | 42229 | yes | yes |
+| win7-x86 `ntdll` | 67696 | yes | yes |
+| win7-x86 `kernel32` | 60037 | yes | yes |
+| win7-x64 `ntdll` | 84434 | yes | yes |
+| win7-x64 `kernel32` | 70894 | yes | yes |
+| win10-x86 `ntdll` | **0** | no | yes |
+| win10-x86 `kernel32` | **0** | no | yes |
+| win10-x86 `KernelBase` | **0** | no | yes |
+| win10-x64 `ntdll` | **0** | no | yes |
+| win10-x64 `kernel32` | **0** | no | yes |
+| win10-x64 `KernelBase` | **0** | no | yes |
+| win11-x86 `ntdll` | **0** | no | yes |
+| win11-x86 `kernel32` | **0** | no | yes |
+| win11-x86 `KernelBase` | **0** | no | yes |
+| win11-x64 `ntdll` | **0** | no | yes |
+| win11-x64 `kernel32` | **0** | no | yes |
+| win11-x64 `KernelBase` | **0** | no | yes |
 
-Whether later Windows releases still do was not tested.
+Every XP and Win7 PDB measured carries a map and slot 10; Win7 x64 `ntdll` has
+the largest of the set at 84434 entries, more than double XP's. **Not one Win10
+or Win11 PDB carries a single OMAP entry**, on either architecture, and none
+carries slot 10. `KernelBase` is included deliberately: post-Win7 it is where the
+implementations moved, so it is the module a modern consumer would most want
+translated, and it has nothing to translate. The Win10 binaries measured are from
+2018 and the Win11 ones are current.
+
+So the practice ended somewhere between Windows 7 SP1 and that Windows 10 build.
+This was not narrowed further, and the boundary was not searched for — Windows 8
+and 8.1 were not tested, and a single build of each release is not the release.
+
+What it means for a consumer is worth stating plainly: **OMAP is a compatibility
+concern, not a current one.** A tool that only ever sees binaries from the last
+decade may never encounter a map. A tool that reads older system binaries, or
+anything a post-link rewriter has been through, cannot skip it — and the cost of
+skipping it does not degrade gracefully, as the numbers above show.
 
 ## What was measured
 
@@ -161,12 +201,19 @@ win7-x86 kernel32       60037      1273     851      7   233    182
 win7-x64 ntdll          84434      1961    1961      0     0      0
 win7-x64 kernel32       70894      1287     870    139   166    112
 
-untranslated matches: 0 of 8730
+untranslated matches: 0 of 8730, over the pairs that carry a map
 ```
 
 `ntdll` agrees on 99.8%–100% of its exports on all three targets. It is the
 module BBT rearranges most and the one whose PDB carries the largest map, so it
 is the strongest of the six.
+
+The twelve Win10 and Win11 pairs are in the same run and are not in the table above,
+because with no map there is no translation for them to get right. They are still
+worth having: purepdb matches 2322 of 2323 `ntdll` exports on Win10 x64, 2462 of
+2464 on Win11 x64, and 1661 of 1746 on Win10 x64 `KernelBase` — which says the
+rest of the parser holds up on current system binaries. That is a different claim
+from the one this document is about, and the same command produces it for free.
 
 ### Reading the residue honestly
 

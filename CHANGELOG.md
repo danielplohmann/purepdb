@@ -27,7 +27,9 @@ resolve *differently* would be breaking, and would say so here.
   land in an untracked cache. The oracle is the export table, which is written
   in the shipped image's address space and owes nothing to the PDB. On six pairs
   from XP and Win7, `ntdll` agrees on 99.8%–100% of its exports and **0 of 8730
-  match the untranslated address**.
+  match the untranslated address**. Extended to eighteen pairs across XP, 7, 10
+  and 11: no Win10 or Win11 PDB carries a single OMAP entry, so the practice
+  ended between Win7 and Win10.
 - OMAP translation is now checked against moved code rather than against
   arithmetic. `tests/_relink.py` and `tools/relink_omap.py` move the function
   bodies in a copy of one of our own fixtures and write the tables that describe

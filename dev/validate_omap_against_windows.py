@@ -24,9 +24,10 @@ the map matches essentially nothing.
 
     python dev/validate_omap_against_windows.py ~/win-dlls --fetch
 
-Recorded results, six pairs from a Windows XP and a Windows 7 installation.
-Every one of them carries slot 10, so BBT was still in use for Win7 -- worth
-knowing, because the era was an open question before this was run.
+Recorded results. The six XP and Win7 pairs all carry slot 10, so BBT was still
+in use for Win7. None of the twelve Win10 and Win11 pairs carries a single OMAP
+entry, so the practice ended between the two -- which is why the counterfactual
+below is scoped to the pairs that actually carry a map.
 
     pair                   omap   common  exact  thunk  near   far
     winxp    ntdll        37061    1294    1292     0     1      1
@@ -263,19 +264,28 @@ def main(argv: list[str]) -> int:
 
     print(f"\n{'pair':28s} {'omap':>7s} {'common':>7s} {'exact':>6s} "
           f"{'thunk':>6s} {'near':>5s} {'far':>5s}")
-    total_common = total_untranslated = 0
+    translated_common = translated_untranslated = 0
     for label, r in rows:
         print(f"{label:28s} {r['omap']:7d} {r['common']:7d} {r['exact']:6d} "
               f"{r['thunk']:6d} {r['near']:5d} {r['far']:5d}")
         if r["deltas"]:
             top = ", ".join(f"{d:+d}x{n}" for d, n in r["deltas"].most_common(3))
             print(f"{'':28s} near-miss offsets: {top}")
-        total_common += r["common"]
-        total_untranslated += r["untranslated"]
+        # Only a pair that actually translates can speak to the counterfactual.
+        # A file with no map has nothing to not-translate, and counting it would
+        # inflate the one number this check exists to produce.
+        if r["omap"] and r["slot10"]:
+            translated_common += r["common"]
+            translated_untranslated += r["untranslated"]
 
-    print(f"\nuntranslated matches: {total_untranslated} of {total_common}")
-    print("  (this is the counterfactual: resolving against slot 10 without "
-          "applying\n   the map should match essentially nothing)")
+    if translated_common:
+        print(f"\nuntranslated matches: {translated_untranslated} of "
+              f"{translated_common}, over the pairs that carry a map")
+        print("  (the counterfactual: resolving against slot 10 without "
+              "applying the\n   map should match essentially nothing)")
+    else:
+        print("\nno pair carried both a map and slot 10, so nothing here "
+              "exercised translation")
 
     for line in failures:
         print(f"FAIL: {line}", file=sys.stderr)
