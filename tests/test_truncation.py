@@ -153,29 +153,76 @@ def _short_record(kind: int, payload_len: int = 0) -> bytes:
     return struct.pack("<HH", 2 + len(payload), kind) + payload
 
 
-# Every kind `parse_record` dispatches, so that re-narrowing that dispatch
-# fails here rather than silently dropping truncated records of the kinds it
-# stops covering. S_INLINESITE is absent because 12 bytes is a *whole* one --
-# three u32s and no annotations; tests/test_inline.py covers its short form.
-@pytest.mark.parametrize("kind", [
+# Written out rather than derived from `codeview.DISPATCHED_KINDS`, and the test
+# below is why. Parametrizing over the dispatch itself would lose the property
+# this exists to hold: dropping a kind from the dispatch would drop its test
+# case too, so the suite would report one fewer passing test and no failure --
+# measured, not assumed. So this is the expectation, and
+# `test_the_dispatch_and_this_list_agree` couples the two. Drift in either
+# direction is then one loud failure: a kind added to the dispatch and not here
+# is untested, and a kind removed from the dispatch is a silent loss of
+# coverage. Both were real; see issue #46.
+TRUNCATABLE_KINDS = [
     codeview.S_PUB32, codeview.S_GPROC32, codeview.S_LPROC32,
+    codeview.S_GPROC32_ID, codeview.S_LPROC32_ID,
     codeview.S_GDATA32, codeview.S_LDATA32,
-    codeview.S_PROCREF, codeview.S_LPROCREF, codeview.S_LABEL32,
-    codeview.S_THUNK32, codeview.S_TRAMPOLINE, codeview.S_CONSTANT,
-    codeview.S_UDT, codeview.S_COMPILE3,
+    codeview.S_PROCREF, codeview.S_LPROCREF,
+    codeview.S_LABEL32, codeview.S_THUNK32, codeview.S_TRAMPOLINE,
+    codeview.S_CONSTANT, codeview.S_UDT, codeview.S_COMPILE3,
+    codeview.S_INLINESITE,
     codeview.S_GTHREAD32, codeview.S_LTHREAD32,
-])
-@pytest.mark.parametrize("payload_len", [0, 4, 12])
-def test_a_record_too_short_for_its_kind_is_skipped_not_raised(kind, payload_len):
-    """RecordLen is the record's own claim, and nothing checks it against the
-    fixed portion the kind needs. A short one used to hand a truncated payload
-    to a parser expecting a whole one, and EOFError escaped `functions()`."""
-    assert codeview.decode_record(kind, b"\x41" * payload_len) is None
-    data = _short_record(kind, payload_len)
-    assert codeview.extract_publics(data) == []
-    assert codeview.extract_procs(data) == []
-    assert codeview.extract_data(data) == []
-    assert codeview.count_malformed_records(data) == 1
+]
+
+
+def test_the_dispatch_and_this_list_agree():
+    """The coupling. `parse_record` is what `count_malformed_records` asks
+    whether a record is too short for its kind, so a kind it does not dispatch
+    has its damaged records dropped and counted by nothing."""
+    listed = set(TRUNCATABLE_KINDS)
+    assert len(listed) == len(TRUNCATABLE_KINDS), "a kind is listed twice"
+    missing = codeview.DISPATCHED_KINDS - listed
+    extra = listed - codeview.DISPATCHED_KINDS
+    assert not missing, (
+        "dispatched by parse_record but not covered by the truncation sweep: "
+        + ", ".join(sorted(codeview.kind_name(k) for k in missing)))
+    assert not extra, (
+        "listed here but no longer dispatched, so its truncated records are "
+        "counted by nothing: "
+        + ", ".join(sorted(codeview.kind_name(k) for k in extra)))
+
+
+@pytest.mark.parametrize("kind", TRUNCATABLE_KINDS,
+                         ids=lambda k: codeview.kind_name(k))
+def test_every_dispatched_kind_counts_its_truncated_records(kind):
+    """A record too short for the kind it claims must be counted, not dropped.
+
+    `RecordLen` is the record's own claim and nothing checks it against the
+    fixed portion the kind needs, so a short one used to hand a truncated
+    payload to a parser expecting a whole one and let `EOFError` escape.
+
+    Swept over payload lengths rather than checked at three chosen ones,
+    because "short" is per kind: S_UDT needs four bytes and a NUL, S_COMPILE3
+    twenty-two, and a 12-byte S_INLINESITE is a *whole* record -- which is why
+    the list this replaces had to carve out an exemption for it. The sweep needs
+    to know none of that. It asserts the property instead: nothing raises at any
+    length, every record is either counted malformed or parsed, and at least one
+    length is short enough to be counted.
+    """
+    saw_malformed = False
+    for payload_len in range(41):
+        data = _short_record(kind, payload_len)
+        decoded = codeview.decode_record(kind, b"\x41" * payload_len)
+        malformed = codeview.count_malformed_records(data)
+        assert malformed in (0, 1), payload_len
+        if malformed:
+            saw_malformed = True
+            assert decoded is None, payload_len
+            assert codeview.extract_publics(data) == []
+            assert codeview.extract_procs(data) == []
+            assert codeview.extract_data(data) == []
+    assert saw_malformed, (
+        f"{codeview.kind_name(kind)} is dispatched by parse_record but no "
+        f"truncated payload of it is ever counted malformed")
 
 
 def test_good_records_survive_a_malformed_one_between_them():

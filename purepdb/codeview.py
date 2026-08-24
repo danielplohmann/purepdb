@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import collections
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .reader import Reader
@@ -543,9 +544,10 @@ def parse_record(kind: int, payload: bytes):
 
     Every kind with a parser is dispatched here, because this is also what
     `count_malformed_records` asks "is this record shorter than it claims to
-    be?" with. A kind missing from this list is one whose damaged records are
-    dropped by the extractors and counted by nothing -- a symbol that vanishes
-    with no diagnostic, which is the one failure this parser must not have.
+    be?" with. A kind missing from `_RECORD_PARSERS` is one whose damaged
+    records are dropped by the extractors and counted by nothing -- a symbol
+    that vanishes with no diagnostic, which is the one failure this parser must
+    not have.
 
     That covers every record a parser rejects by *raising*. Two kinds can also
     be dropped without an exception -- a constant whose numeric leaf we do not
@@ -555,31 +557,14 @@ def parse_record(kind: int, payload: bytes):
     Raises EOFError when the payload is shorter than the kind requires; see
     `decode_record` for the tolerant form the extractors use.
     """
-    if kind == S_PUB32:
-        return parse_public(payload)
-    if kind in PROC_KINDS:
-        return parse_proc(kind, payload)
-    if kind in _DATA_KINDS:
-        return parse_data(kind, payload)
-    if kind in PROC_REF_KINDS:
-        return parse_proc_ref(kind, payload)
-    if kind == S_LABEL32:
-        return parse_label(payload)
-    if kind == S_THUNK32:
-        return parse_thunk(payload)
-    if kind == S_TRAMPOLINE:
-        return parse_trampoline(payload)
-    if kind == S_CONSTANT:
-        return parse_constant(payload)
-    if kind == S_UDT:
-        return parse_udt(payload)
-    if kind == S_COMPILE3:
-        return parse_compile_info(payload)
-    if kind == S_INLINESITE:
-        return parse_inline_site(payload)
-    if kind in THREAD_KINDS:
-        return parse_thread_local(kind, payload)
-    return None
+    parser = _RECORD_PARSERS.get(kind)
+    if parser is None:
+        return None
+    return parser(kind, payload)
+
+
+# `_RECORD_PARSERS` and `DISPATCHED_KINDS` are assembled at the foot of this
+# module, because the parsers they name are defined below this point.
 
 
 def decode_record(kind: int, payload: bytes):
@@ -1052,3 +1037,29 @@ def extract_procs(data: bytes) -> list[ProcSymbol]:
             if proc is not None:
                 out.append(proc)
     return out
+
+
+# kind -> parser, as (kind, payload) so the two calling conventions among the
+# parsers do not leak into the dispatch. This table IS the dispatch: it is what
+# `parse_record` walks and what `DISPATCHED_KINDS` is derived from, so a kind
+# cannot be decoded without the truncation guard in tests/test_truncation.py
+# covering it. Keeping those two in step by hand drifted three times; see
+# issue #46.
+_RECORD_PARSERS: dict[int, Callable[[int, bytes], object]] = {
+    S_PUB32: lambda _kind, payload: parse_public(payload),
+    S_LABEL32: lambda _kind, payload: parse_label(payload),
+    S_THUNK32: lambda _kind, payload: parse_thunk(payload),
+    S_TRAMPOLINE: lambda _kind, payload: parse_trampoline(payload),
+    S_CONSTANT: lambda _kind, payload: parse_constant(payload),
+    S_UDT: lambda _kind, payload: parse_udt(payload),
+    S_COMPILE3: lambda _kind, payload: parse_compile_info(payload),
+    S_INLINESITE: lambda _kind, payload: parse_inline_site(payload),
+    **dict.fromkeys(PROC_KINDS, parse_proc),
+    **dict.fromkeys(_DATA_KINDS, parse_data),
+    **dict.fromkeys(PROC_REF_KINDS, parse_proc_ref),
+    **dict.fromkeys(THREAD_KINDS, parse_thread_local),
+}
+
+# The kinds `parse_record` decodes. Exported so a test can walk the dispatch
+# rather than restate it -- the restatement is what kept falling behind.
+DISPATCHED_KINDS = frozenset(_RECORD_PARSERS)
