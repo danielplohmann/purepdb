@@ -131,11 +131,27 @@ class MsfFile:
         ndir = self.super.num_directory_bytes
         n_dir_blocks = _ceil_div(ndir, bs)
 
-        # The block map (at block_map_addr) is an array of uint32 block
-        # indices naming the directory's own blocks.
-        block_map = self._read_block(self.super.block_map_addr)
-        if n_dir_blocks * 4 > len(block_map):
-            raise MsfError("stream directory block map does not fit in one block")
+        # The block map is an array of uint32 block indices naming the
+        # directory's own blocks. It starts at `block_map_addr` and runs over as
+        # many consecutive blocks as it needs, which is more than one whenever
+        # the directory has more blocks than a block can hold indices for.
+        #
+        # That is not exotic. A block size of 1024 holds 256 indices, so a
+        # directory of more than 256 blocks -- a quarter of a megabyte, which a
+        # large C++ project passes easily -- already needs two. Assuming one
+        # block here rejected a valid 127 MB PDB outright, which is worse than
+        # this parser's usual failure mode of an empty result.
+        n_map_blocks = _ceil_div(n_dir_blocks * 4, bs)
+        block_map = self._read_blocks(
+            [self.super.block_map_addr + i for i in range(n_map_blocks)],
+            n_dir_blocks * 4,
+        )
+        if len(block_map) < n_dir_blocks * 4:
+            raise MsfError(
+                f"stream directory block map is short: need {n_dir_blocks * 4} "
+                f"bytes for {n_dir_blocks} directory block(s), have "
+                f"{len(block_map)}"
+            )
         dir_block_indices = list(struct.unpack_from(f"<{n_dir_blocks}I", block_map, 0))
 
         directory = self._read_blocks(dir_block_indices, ndir)

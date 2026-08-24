@@ -42,8 +42,13 @@ def build_msf(streams: list[bytes], block_size: int = 512) -> bytes:
     dir_blocks = list(range(next_block, next_block + n_dir_blocks))
     next_block += n_dir_blocks
 
+    # The block map runs over as many consecutive blocks as its indices need,
+    # which is more than one once the directory exceeds bs/4 blocks. Reserving
+    # one and writing more used to run past the end of the reserved block and
+    # silently resize the buffer, producing a file whose NumBlocks was a lie.
+    n_map_blocks = _ceil_div(n_dir_blocks * 4, bs)
     block_map_block = next_block
-    next_block += 1
+    next_block += n_map_blocks
 
     num_blocks = next_block
     buf = bytearray(num_blocks * bs)
@@ -70,7 +75,8 @@ def build_msf(streams: list[bytes], block_size: int = 512) -> bytes:
     write_blocks(dir_blocks, directory)
 
     block_map = struct.pack(f"<{n_dir_blocks}I", *dir_blocks)
-    buf[block_map_block * bs : block_map_block * bs + len(block_map)] = block_map
+    write_blocks(list(range(block_map_block, block_map_block + n_map_blocks)),
+                 block_map)
 
     return bytes(buf)
 

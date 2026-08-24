@@ -14,7 +14,17 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- A stream directory whose block map spans more than one block is read instead
+  of rejected. The map starts at `BlockMapAddr` and runs over as many
+  consecutive blocks as its indices need; assuming one raised `MsfError` on a
+  valid file — a hard rejection, which is worse than this parser's usual
+  failure mode of an empty result. Found on a real 127 MB PDB with a 1024-byte
+  block size, whose 497 directory blocks needed 1988 bytes of map. It now parses
+  clean: 3354 streams, 63000 procedure records, 55147 functions, no malformed
+  records and no truncations. `tests/_synth.py` had the mirror-image assumption
+  and would silently resize its own buffer past the block it had reserved.
 
 ## [0.4.0] - 2026-08-24
 
