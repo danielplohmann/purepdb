@@ -37,6 +37,23 @@ resolve *differently* would be breaking, and would say so here.
   clean: 3354 streams, 63000 procedure records, 55147 functions, no malformed
   records and no truncations. `tests/_synth.py` had the mirror-image assumption
   and would silently resize its own buffer past the block it had reserved.
+- `dev/validate_against_llvm.py` reported two files as disagreeing with
+  `llvm-pdbutil` where the comparison was the thing at fault, which is what the
+  first nightly cross-check run turned up. A dump the tool declines to produce
+  — `--section-contribs` on a PDB with no section-header stream — is now a
+  skipped check with its reason printed, not a failed file that took the three
+  checks after it down with it. Inline-site ranges are rebuilt from the
+  annotation deltas, because `llvm-pdbutil` advances its cursor past the length
+  of a standalone `ChangeCodeLength` and not past the one fused into
+  `ChangeCodeLengthAndCodeOffset` — which is invisible on a file using the
+  first and shifts every range after the first on a file using the second. And
+  an inlinee name is left out of the comparison for a file the tool reports no
+  ID stream for, since it then resolves every item id against the TPI and
+  prints the name of whatever type shares the index. The whole seven-file
+  corpus agrees again: the syzygy fixture compares all nine checks, and the
+  slot-5-less one compares the seven that do not need a section-header stream
+  instead of stopping at the sixth.
+
 ## [0.4.0] - 2026-08-24
 
 ### Added

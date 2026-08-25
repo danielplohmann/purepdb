@@ -105,6 +105,26 @@ check is registered in a "verified nothing" gate that fails the run if it
 compared nothing, and a test asserts that every check is in that gate — so a
 tenth check cannot be added without one.
 
+The mirror-image failure is a harness that reports a disagreement it never had,
+and the first nightly run found two of those in one file each. `llvm-pdbutil`
+will not print section contributions for a PDB with no section-header stream,
+and will not open the IPI of a PDB whose info stream does not advertise one —
+both of which the corpus holds on purpose. Neither is a comparison that came
+out different; both are the reference implementation declining to answer, and
+they are now skipped with the reason printed rather than counted against
+purepdb. A skip is deliberately not agreement: it leaves the check out of the
+gate above, so a check no file in the corpus could answer for still fails the
+run.
+
+Where the two implementations genuinely read the same bytes differently, the
+harness has to say which reading it is comparing and why. `llvm-pdbutil` moves
+its inline-site cursor past the length of a standalone `ChangeCodeLength` and
+not past the one fused into `ChangeCodeLengthAndCodeOffset`; purepdb moves it
+for both, which is the reading that makes the two opcodes mean the same thing.
+The check rebuilds the ranges from the deltas, and tracks llvm's own cursor
+beside them so that the day this stops being true, the run says so instead of
+comparing against a rule that no longer holds.
+
 ## 5. Fuzzing the boundary, not the format
 
 `tools/fuzz.py` drives every public entry point over random, structurally

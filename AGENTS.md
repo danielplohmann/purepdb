@@ -56,7 +56,7 @@ tests/              # pytest suite
 tools/fuzz.py       # the parse-boundary fuzzer; runs outside pytest
 tools/relink_omap.py  # CLI over tests/_relink.py
 dev/                # scratch, EXCEPT two validate_* scripts (see below)
-.github/workflows/  # ci.yml, fuzz.yml, release.yml
+.github/workflows/  # ci.yml, fuzz.yml, release.yml, validate.yml
 ```
 
 `dev/` is a scratch directory with two tracked exceptions: `.gitignore` holds
@@ -117,7 +117,7 @@ activate it first and drop the override):
 | llvm cross-check | `.venv/bin/python dev/validate_against_llvm.py` (needs `llvm-pdbutil`; skips cleanly without it) |
 | OMAP vs Windows | `.venv/bin/python dev/validate_omap_against_windows.py <dll-dir> --fetch` (needs Windows DLLs and network; nothing is redistributed) |
 
-Expected state on a clean tree: **566 tests pass**, `ruff check` and `ty check`
+Expected state on a clean tree: **581 tests pass**, `ruff check` and `ty check`
 both clean, and the fuzzer reports no escaped exception. Run tests, lint *and*
 a quick fuzz pass before considering work complete.
 
