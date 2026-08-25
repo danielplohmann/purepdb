@@ -104,6 +104,120 @@ def test_a_line_entry_carrying_a_column_reads_the_line_not_the_column(
     assert not validator._LINE_ENTRY.sub("", raw).strip(" \t!")
 
 
+@posix_only
+def test_a_dump_the_tool_cannot_answer_is_not_a_disagreement(validator,
+                                                             tmp_path):
+    """`--section-contribs` needs the section-header stream, and exits 1 on a
+    PDB that has no slot 5 -- which one fixture deliberately does not have.
+    That is the reference implementation declining to read a shape it does not
+    support, so it establishes nothing either way; failing the file for it
+    reported purepdb as wrong about a comparison that never happened, and took
+    the three checks after it down with it.
+    """
+    assert not issubclass(validator.ToolLimitation, validator.ParseError)
+
+    runs = tmp_path / "runs"
+    tool = tmp_path / "slot5-less-pdbutil"
+    tool.write_text(f"#!/bin/sh\necho run >> {runs}\n"
+                    "echo 'llvm-pdbutil: PDB does not contain the requested "
+                    "image section header type' >&2\nexit 1\n")
+    tool.chmod(0o755)
+    cache: dict = {}
+
+    for _ in range(2):
+        with pytest.raises(validator.ToolLimitation, match="slot 5"):
+            validator.dump(str(tool), tmp_path / "x.pdb",
+                           ("--section-contribs",), cache)
+
+    # Remembered, not just re-raised: two checks read this dump, and the
+    # second must not re-run a tool whose answer is already known.
+    assert runs.read_text().count("run") == 1
+
+
+@posix_only
+def test_an_unrecognised_failure_is_still_a_parse_error(validator, tmp_path):
+    """The skip above is for specific, recognised messages. "exited 1" on its
+    own is indistinguishable from the tool having changed under us, which is
+    the case that must stop the run rather than quietly compare less."""
+    tool = tmp_path / "broken-pdbutil"
+    tool.write_text("#!/bin/sh\necho 'llvm-pdbutil: no such file' >&2\n"
+                    "exit 1\n")
+    tool.chmod(0o755)
+
+    with pytest.raises(validator.ParseError, match="failed"):
+        validator.dump(str(tool), tmp_path / "x.pdb",
+                       ("--section-contribs",), {})
+
+
+def test_inline_site_ranges_come_from_the_deltas_not_the_offsets(validator):
+    """llvm-pdbutil moves its cursor past the length of a standalone
+    `ChangeCodeLength` and not past the one fused into
+    `ChangeCodeLengthAndCodeOffset`, so from the second range on, a site built
+    out of the fused opcode prints every offset short by the lengths before
+    it. Reading the absolutes off the fused form reported all 140 sites of the
+    syzygy fixture as a disagreement.
+    """
+    fused = validator.RefRecord(
+        kind="S_INLINESITE", header="", module=0,
+        body=["           0C028143  code 0x143 (+0x143) code end 0x145 (+0x2)",
+              "           0C0805    code 0x148 (+0x5) code end 0x150 (+0x8)"])
+
+    # 0x14A, not the 0x148 llvm printed: the second range starts where the
+    # first one ended plus the delta, which is the reading that makes the two
+    # opcodes mean the same thing.
+    assert validator.inline_site_ranges(fused) == [(0x143, 2), (0x14A, 8)]
+
+
+def test_the_standalone_length_opcode_still_reads_as_llvm_prints_it(validator):
+    """The other half of the same rule, and the reason this was not noticed
+    for so long: on a file whose sites close their ranges with a standalone
+    `ChangeCodeLength`, both cursors agree, and rustpe closes 5281 of them."""
+    standalone = validator.RefRecord(
+        kind="S_INLINESITE", header="", module=0,
+        body=["           030C      code 0xC (+0xC)",
+              "           0407      code end 0x13 (+0x7)",
+              "           0311      code 0x24 (+0x11)",
+              "           0405      code end 0x29 (+0x5)"])
+
+    ranges = validator.inline_site_ranges(standalone)
+
+    assert ranges == [(0xC, 7), (0x24, 5)]
+    # Every one of them is exactly what llvm's own `code end` minus its length
+    # says, which is what the old reading computed directly.
+    assert ranges == [(0x13 - 7, 7), (0x29 - 5, 5)]
+
+
+def test_a_cursor_rule_that_stopped_holding_raises(validator):
+    """The model above is llvm's behaviour, not a fact about the format, so
+    the run has to notice if it changes rather than compare against a rule
+    that no longer holds. llvm's cursor is tracked beside ours and checked
+    against every absolute offset printed."""
+    moved = validator.RefRecord(
+        kind="S_INLINESITE", header="", module=0,
+        body=["           0C028143  code 0x143 (+0x143) code end 0x145 (+0x2)",
+              # What llvm would print if it started advancing past a fused
+              # length: 0x145 + 5 rather than 0x143 + 5.
+              "           0C0805    code 0x14A (+0x5) code end 0x152 (+0x8)"])
+
+    with pytest.raises(validator.ParseError, match="no longer holds"):
+        validator.inline_site_ranges(moved)
+
+
+def test_an_inlinee_id_llvm_resolved_in_the_wrong_stream_is_not_compared(
+        validator):
+    """llvm-pdbutil opens the IPI only when the info stream advertises the
+    feature code saying there is one. The syzygy fixture's feature codes were
+    dropped by whatever rewrote it, so `Has IDs: false` sits over a perfectly
+    good IPI in stream 4 and every inlinee id resolves against the TPI -- the
+    name printed is that of whatever type shares the index."""
+    assert validator.resolves_item_ids("  Has IDs: true\n")
+    assert not validator.resolves_item_ids("  Features: 0x0\n"
+                                           "  Has IDs: false\n")
+
+    with pytest.raises(validator.ParseError, match="ID stream"):
+        validator.resolves_item_ids("  Has Types: true\n")
+
+
 def test_every_check_is_named_for_the_verified_nothing_gate(validator):
     """The gate asks which checks compared no record, so a check missing from
     that list would be exempt from it without anything saying so."""

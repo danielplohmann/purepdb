@@ -31,7 +31,7 @@ description and nowhere else:
     module attribution  the module each function is attributed to
     lines               every file:line and the address it starts at
 
-Five things about llvm-pdbutil's output are worth knowing before trusting a
+Eight things about llvm-pdbutil's output are worth knowing before trusting a
 comparison against it, all of them handled here:
 
   * `dump -l` prints line blocks under modules whose debug stream is 0xFFFF,
@@ -46,6 +46,24 @@ comparison against it, all of them handled here:
     `SC2[...]` for the V2 one, which purepdb also reads.
   * a file heading is `path (MD5: ...)` or `path (no checksum)`; a line block
     is `line/addr entries` or `line/column/addr entries`.
+  * `--section-contribs` needs the section-header stream, and exits 1 with
+    "PDB does not contain the requested image section header type" on a PDB
+    that has no slot 5. That is the reference implementation declining to
+    answer, not a disagreement, so the two checks reading that dump are
+    skipped for such a file rather than failing it.
+  * it opens the IPI stream only when the PDB info stream advertises the
+    feature code saying there is one. A file whose feature codes were dropped
+    reports `Has IDs: false` with a perfectly good IPI in stream 4, and every
+    item id then resolves against the *TPI*, printing a type name where an
+    inlinee's function name belongs. The name is left out of the inline-site
+    comparison for such a file; the id and the ranges are still compared.
+  * its inline-site cursor moves past the length of a standalone
+    `ChangeCodeLength` and *not* past the one fused into
+    `ChangeCodeLengthAndCodeOffset`, so a file using the fused opcode has
+    every range after the first printed short by the lengths before it. Ranges
+    are therefore rebuilt from the deltas rather than read off the absolute
+    offsets -- and llvm's own cursor is tracked alongside, so that if this
+    stops being true the script says so instead of comparing quietly.
 
 A module heading, a section-contribution row or a line entry this script does
 not recognise raises `ParseError` rather than being skipped: mis-reading one of
@@ -95,6 +113,27 @@ class ParseError(Exception):
     Raised rather than skipped: a comparison that quietly parsed half of the
     reference output would report agreement it did not verify.
     """
+
+
+class ToolLimitation(Exception):
+    """llvm-pdbutil cannot answer for this file, and said so.
+
+    Deliberately not a `ParseError`. A dump that failed because the reference
+    implementation declines to read a shape it does not support establishes
+    nothing about purepdb either way, so the check reading it is skipped and
+    the file is not failed. Every such case is a specific, recognised message
+    -- an unrecognised failure is still a `ParseError`, because "the tool
+    exited 1" is otherwise indistinguishable from "the tool changed".
+    """
+
+
+# Failures that are the tool declining rather than the tool breaking, each with
+# the reason a reader of the log needs. Matched on llvm's stderr.
+_CANNOT_ANSWER = (
+    ("PDB does not contain the requested image section header type",
+     "this file has no section-header stream (optional debug header slot 5), "
+     "which llvm-pdbutil needs before it will name a contribution's section"),
+)
 
 
 @dataclass
@@ -150,9 +189,21 @@ def dump(tool: str, path: Path, args: Iterable[str], cache: dict) -> str:
             detail = proc.stderr.strip().splitlines()
             note = (detail[0][:200] if detail
                     else f"exit status {proc.returncode}")
-            raise ParseError(f"llvm-pdbutil {' '.join(key)} failed: {note}")
-        cache[key] = proc.stdout
-    return cache[key]
+            for marker, why in _CANNOT_ANSWER:
+                if marker in proc.stderr:
+                    # Remembered rather than re-raised on each call: two checks
+                    # share `--section-contribs`, and the second would
+                    # otherwise re-run a dump whose answer is already known.
+                    cache[key] = ToolLimitation(why)
+                    break
+            else:
+                raise ParseError(f"llvm-pdbutil {' '.join(key)} failed: {note}")
+        else:
+            cache[key] = proc.stdout
+    remembered = cache[key]
+    if isinstance(remembered, ToolLimitation):
+        raise remembered
+    return remembered
 
 
 # --- parsing what it printed ------------------------------------------------
@@ -236,6 +287,25 @@ def iter_records(text: str):
             current.body.append(line)
     if current is not None:
         yield current
+
+
+_HAS_IDS = re.compile(r"^\s*Has IDs: (?P<answer>true|false)\s*$", re.M)
+
+
+def resolves_item_ids(text: str) -> bool:
+    """Whether llvm-pdbutil will resolve an item id, from `dump --summary`.
+
+    It opens the IPI stream only when the PDB info stream advertises the
+    feature code that says there is one, so a file whose feature codes were
+    dropped answers `Has IDs: false` over a perfectly good IPI in stream 4.
+    Every item id then resolves against the TPI instead, which turns an
+    inlinee's name into the name of whatever type shares its index.
+    """
+    m = _HAS_IDS.search(text)
+    if m is None:
+        raise ParseError("`dump --summary` did not say whether the file has "
+                         "an ID stream")
+    return m.group("answer") == "true"
 
 
 def module_names(text: str) -> dict[int, str]:
@@ -525,13 +595,97 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
 
 _INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+) "
                       r"\((?P<name>.*)\), parent")
-_CODE_END = re.compile(r"code end (?P<end>0x[0-9A-Fa-f]+) "
-                       r"\(\+(?P<length>0x[0-9A-Fa-f]+)\)")
+# Every annotation prints its own bytes first, and the first of those is the
+# opcode: the compressed encoding of an opcode in 1..13 is the byte itself.
+_ANNOTATION = re.compile(r"^\s+(?P<opcode>[0-9A-F]{2})[0-9A-F]*\s+"
+                         r"(?P<text>\S.*)$")
+# `code 0x143 (+0x143)` moves the cursor; `code end 0x145 (+0x2)` closes a
+# range. An annotation prints one or the other, or -- for the fused opcode --
+# both, in that order.
+_CODE = re.compile(r"code (?P<end>end )?0x(?P<value>[0-9A-F]+) "
+                   r"\(\+0x(?P<delta>[0-9A-F]+)\)")
+
+_BA_CHANGE_CODE_OFFSET_BASE = "02"
+_BA_CHANGE_CODE_LENGTH = "04"
+_BA_CHANGE_CODE_LENGTH_AND_CODE_OFFSET = "0C"
+_CLOSES_A_RANGE = (_BA_CHANGE_CODE_LENGTH,
+                   _BA_CHANGE_CODE_LENGTH_AND_CODE_OFFSET)
 
 
-def check_inline_sites(pdb: PDB, text: str) -> Result:
-    ours = [(site.parent, site.inlinee, site.name, tuple(site.ranges))
-            for site in pdb.inline_sites()]
+def inline_site_ranges(rec: RefRecord) -> list[tuple[int, int]]:
+    """The code ranges one S_INLINESITE covers, relative to its procedure.
+
+    Rebuilt from the deltas rather than read off the absolute offsets llvm
+    prints, because on some files those two disagree and the deltas are the
+    part both sides read the same way. `ChangeCodeLength` moves
+    llvm's cursor past the range it closed; the length fused into
+    `ChangeCodeLengthAndCodeOffset` does not move it, so from the second range
+    on, a site built out of the fused opcode prints every offset short by the
+    lengths before it. A cursor that a range's length advances is the reading
+    that makes the two opcodes mean the same thing, and it is what purepdb
+    does.
+
+    llvm's own cursor is tracked beside it and checked against every absolute
+    offset printed. That is what keeps this from being an assumption: the day
+    the tool stops behaving this way, the run says so rather than comparing
+    against a rule that no longer holds.
+    """
+    offset = 0  # the cursor a range's length advances
+    theirs = 0  # llvm-pdbutil's, which only a standalone length advances
+    ranges: list[tuple[int, int]] = []
+    for line in rec.body:
+        annotation = _ANNOTATION.match(line)
+        if annotation is None:
+            continue
+        opcode = annotation.group("opcode")
+        clauses = _CODE.findall(annotation.group("text"))
+        if clauses and opcode == _BA_CHANGE_CODE_OFFSET_BASE:
+            # Rebases the cursor rather than advancing it, and purepdb stops
+            # at one for that reason -- nothing in the corpus has ever emitted
+            # one, so neither reading is verified. Comparing a rebase we did
+            # not model against a parser that gave up would report a
+            # disagreement about the wrong thing.
+            raise ParseError("an inline site rebases its code offset "
+                             "(ChangeCodeOffsetBase), which neither side of "
+                             "this comparison has ever been checked against")
+        for end, value, delta in clauses:
+            step = int(delta, 16)
+            if not end:
+                offset += step
+                theirs += step
+                expected = theirs
+            else:
+                if opcode not in _CLOSES_A_RANGE:
+                    raise ParseError(f"annotation {opcode} closed a code "
+                                     f"range, which only 04 and 0C do")
+                ranges.append((offset, step))
+                offset += step
+                expected = theirs + step
+                if opcode == _BA_CHANGE_CODE_LENGTH:
+                    theirs += step
+            if int(value, 16) != expected:
+                raise ParseError(
+                    f"llvm-pdbutil's inline-site cursor reads 0x{expected:X} "
+                    f"here and it printed 0x{int(value, 16):X}: the way this "
+                    f"script models annotation {opcode} no longer holds")
+    return ranges
+
+
+def check_inline_sites(pdb: PDB, text: str, named: bool) -> Result:
+    """Compare inline sites; `named` says whether to compare inlinee names.
+
+    An item id llvm resolved against the TPI names a type rather than the
+    inlined function, so for a file it reports no ID stream for, the name is
+    left out of both sides. Left out rather than blanked, so that a difference
+    prints the tuple that was actually compared.
+    """
+    def site(parent: str, inlinee: int, name: str, ranges: tuple) -> tuple:
+        if not named:
+            return (parent, inlinee, ranges)
+        return (parent, inlinee, name, ranges)
+
+    ours = [site(s.parent, s.inlinee, s.name, tuple(s.ranges))
+            for s in pdb.inline_sites()]
 
     theirs = []
     proc: tuple[str, int] | None = None  # (name, offset) of the enclosing proc
@@ -555,22 +709,19 @@ def check_inline_sites(pdb: PDB, text: str) -> Result:
         inlinee = _INLINEE.search(" ".join([rec.header, *rec.body]))
         if inlinee is None:
             raise ParseError("no inlinee on an S_INLINESITE record")
-        # The annotations give a running cursor relative to the procedure's
-        # start; each `code end` closes a range, so its start is end - length.
-        ranges = []
-        for line in rec.body:
-            m = _CODE_END.search(line)
-            if m:
-                end = int(m.group("end"), 16)
-                length = int(m.group("length"), 16)
-                ranges.append((proc[1] + end - length, length))
+        ranges = [(proc[1] + start, length)
+                  for start, length in inline_site_ranges(rec)]
         if not ranges:
             # purepdb drops a site whose annotations describe no code, since
             # there is no address to report it at.
             continue
-        theirs.append((proc[0], int(inlinee.group("id"), 16),
-                       inlinee.group("name"), tuple(ranges)))
-    return Result(ours, theirs)
+        theirs.append(site(proc[0], int(inlinee.group("id"), 16),
+                           inlinee.group("name"), tuple(ranges)))
+    notes = [] if named else [
+        "llvm-pdbutil reports no ID stream for this file, so it resolved every "
+        "inlinee id against the TPI and printed a type name; names not compared"
+    ]
+    return Result(ours, theirs, notes)
 
 
 CHECKS = [
@@ -580,12 +731,11 @@ CHECKS = [
     Check("constants", ("--globals",), check_constants),
     Check("udts", ("--globals",), check_udts),
     Check("contributions", ("--section-contribs",), check_contributions),
-    Check("inline sites", ("--symbols",), check_inline_sites),
 ]
 
-# The two bound per file in `validate()`, named here so that "did every check
+# The three bound per file in `validate()`, named here so that "did every check
 # verify something?" can be asked without running one.
-LATE_CHECKS = ("module attribution", "lines")
+LATE_CHECKS = ("inline sites", "module attribution", "lines")
 
 
 def check_names() -> list[str]:
@@ -639,11 +789,15 @@ def validate(path: Path, tool: str, limit: int, verified: set[str]) -> str:
         modules_text = dump(tool, path, ("--modules",), cache)
         modules = module_names(modules_text)
         streamless = modules_without_a_stream(modules_text)
+        named_inlinees = resolves_item_ids(dump(tool, path, ("--summary",),
+                                               cache))
 
-        # The last two need what `dump --modules` said, so they are bound here
-        # rather than in the table above.
+        # The last three need something a second dump said, so they are bound
+        # here rather than in the table above.
         checks = [
             *CHECKS,
+            Check("inline sites", ("--symbols",),
+                  lambda p, text: check_inline_sites(p, text, named_inlinees)),
             Check("module attribution", ("--section-contribs",),
                   lambda p, text: check_module_attribution(p, text, modules)),
             Check("lines", ("-l",),
@@ -651,7 +805,16 @@ def validate(path: Path, tool: str, limit: int, verified: set[str]) -> str:
         ]
 
         for check in checks:
-            result = check.compare(pdb, dump(tool, path, check.args, cache))
+            try:
+                reference = dump(tool, path, check.args, cache)
+            except ToolLimitation as exc:
+                # Neither agreement nor disagreement: there is no reference
+                # answer for this file to compare against. The check stays out
+                # of `verified`, so if no file in the corpus could answer for
+                # it the run still fails on the gate at the end.
+                print(f"  skip {check.name:<20s} {exc}")
+                continue
+            result = check.compare(pdb, reference)
             diffs = differences(result, limit)
             compared = max(len(result.ours), len(result.theirs))
             if compared:
