@@ -36,6 +36,15 @@ def test_msf_2_is_named():
         MsfFile(data)
 
 
+def test_from_bytes_takes_any_buffer():
+    """A caller who mapped the file rather than reading it should reach the
+    same entry point as one who did not; `MsfFile` accepts the buffer either
+    way, and `from_bytes` is what most callers actually hold."""
+    pdb = PDB.from_bytes(memoryview(_info_pdb_bytes(_vc70_info())))
+
+    assert pdb.info().version == PDB_INFO_VC70
+
+
 def _pdb_with_info_stream(info: bytes) -> PDB:
     return PDB.from_bytes(_info_pdb_bytes(info))
 

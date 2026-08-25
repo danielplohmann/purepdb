@@ -1,6 +1,9 @@
 
+import mmap
+
 import pytest
 
+from purepdb import UnsupportedPdbError
 from purepdb.msf import MsfError, MsfFile
 from tests._synth import build_msf
 
@@ -109,3 +112,41 @@ def test_a_multi_block_map_still_reaches_the_streams():
 
     assert msf.read_stream(0) == b"first"
     assert msf.read_stream(len(payloads) - 1) == b"last"
+
+
+def test_a_memory_map_is_read_the_same_as_bytes(tmp_path):
+    """Sweeping a corpus means opening files a few hundred megabytes each to
+    read a handful of streams out of them, which is what mmap is for. The
+    reader needs a length, slicing and the buffer protocol, and a memory map
+    has all three -- but the annotation said `bytes`, so the one script here
+    that maps a file was a type error rather than a supported way to call it.
+    """
+    payload = bytes(range(256)) * 10
+    path = tmp_path / "mapped.pdb"
+    path.write_bytes(build_msf([b"", payload], block_size=512))
+
+    with (open(path, "rb") as fh,
+          mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mapped):
+        msf = MsfFile(mapped)
+
+        assert msf.read_stream(1) == payload
+        # bytes, not a view onto a mapping that is about to be closed.
+        assert type(msf.read_stream(1)) is bytes
+
+
+def test_a_memoryview_is_read_the_same_as_bytes():
+    payload = b"hello world"
+    data = build_msf([payload])
+
+    assert MsfFile(memoryview(data)).read_stream(0) == payload
+
+
+def test_a_foreign_format_handed_in_as_a_buffer_is_still_named():
+    """The magic test was `data.startswith(...)`, which a memory map does not
+    have. Naming the format is the whole value of that branch -- losing it
+    would answer "bad magic" for every Portable PDB in a swept directory,
+    which is the failure this parser's error messages exist to avoid."""
+    data = b"BSJB\x01\x00\x01\x00" + b"\x00" * 4 + b"PDB v1.0" + b"\x00" * 512
+
+    with pytest.raises(UnsupportedPdbError, match="Portable PDB"):
+        MsfFile(memoryview(data))

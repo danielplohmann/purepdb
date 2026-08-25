@@ -24,7 +24,7 @@ from . import c13, codeview
 from .dbi import ContributionMap, DbiStream, ModuleInfo, SectionContribution
 from .gsi import PublicsStream
 from .ipi import IdTable
-from .msf import MsfError, MsfFile, PdbError, UnsupportedPdbError
+from .msf import Buffer, MsfError, MsfFile, PdbError, UnsupportedPdbError
 from .names import (
     NAMED_STREAM_MAP_OFFSET,
     StringTable,
@@ -467,7 +467,7 @@ class PDB:
         return cls(MsfFile.open(path))
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> PDB:
+    def from_bytes(cls, data: Buffer) -> PDB:
         return cls(MsfFile(data))
 
     # -- metadata -----------------------------------------------------------

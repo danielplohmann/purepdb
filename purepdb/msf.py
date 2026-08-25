@@ -24,8 +24,19 @@ published PDB sources. This is an independent implementation; see NOTICE.
 
 from __future__ import annotations
 
+import mmap
 import struct
 from dataclasses import dataclass
+
+# What this reader needs from the bytes it is handed: a length, slicing, and
+# the buffer protocol `struct.unpack_from` reads through. `bytes` is the usual
+# answer and a memory map is the other one -- reading a handful of streams out
+# of files that run to hundreds of megabytes is exactly what mmap is for, and
+# `dev/survey_pdb_shapes.py` sweeps a corpus that way. Written out rather than
+# taken as a protocol: 3.11 has no `collections.abc.Buffer` to name, and a
+# protocol wide enough to cover these is not something `unpack_from` accepts
+# in place of a real buffer.
+Buffer = bytes | bytearray | memoryview | mmap.mmap
 
 # 32-byte magic for the MSF 7.00 ("big") format.
 BIG_MSF_MAGIC = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00"
@@ -78,13 +89,17 @@ class SuperBlock:
     block_map_addr: int
 
     @classmethod
-    def parse(cls, data: bytes) -> SuperBlock:
+    def parse(cls, data: Buffer) -> SuperBlock:
         if len(data) < _SUPERBLOCK.size:
             raise MsfError("file too small to contain an MSF superblock")
         (magic, bs, fpm, nblocks, ndir, unk, bmap) = _SUPERBLOCK.unpack_from(data, 0)
         if magic != BIG_MSF_MAGIC:
             for prefix, description in _FOREIGN_FORMATS:
-                if data.startswith(prefix):
+                # Sliced rather than `startswith`, which a memory map does not
+                # have: naming the foreign formats is the whole value of this
+                # branch, and losing it for an mmap would answer "bad magic"
+                # to every Portable PDB in a swept directory.
+                if data[:len(prefix)] == prefix:
                     raise UnsupportedPdbError(f"this is {description}")
             raise MsfError("not an MSF 7.00 file (bad magic)")
         if bs not in (512, 1024, 2048, 4096):
@@ -95,7 +110,7 @@ class SuperBlock:
 class MsfFile:
     """Random-access reader over the streams inside an MSF container."""
 
-    def __init__(self, data: bytes):
+    def __init__(self, data: Buffer):
         self._data = data
         self.super = SuperBlock.parse(data)
         expected = self.super.num_blocks * self.super.block_size
@@ -118,7 +133,10 @@ class MsfFile:
         end = start + bs
         if end > len(self._data):
             raise MsfError(f"block {index} out of range")
-        return self._data[start:end]
+        # `bytes(...)` costs nothing on the two cases that already return it
+        # -- slicing `bytes` or an mmap -- and is what keeps a memoryview from
+        # handing its own slices out through a public `-> bytes`.
+        return bytes(self._data[start:end])
 
     def _read_blocks(self, indices: list[int], size: int) -> bytes:
         buf = b"".join(self._read_block(i) for i in indices)
