@@ -117,7 +117,7 @@ activate it first and drop the override):
 | llvm cross-check | `.venv/bin/python dev/validate_against_llvm.py` (needs `llvm-pdbutil`; skips cleanly without it) |
 | OMAP vs Windows | `.venv/bin/python dev/validate_omap_against_windows.py <dll-dir> --fetch` (needs Windows DLLs and network; nothing is redistributed) |
 
-Expected state on a clean tree: **581 tests pass**, `ruff check` and `ty check`
+Expected state on a clean tree: **583 tests pass**, `ruff check` and `ty check`
 both clean, and the fuzzer reports no escaped exception. Run tests, lint *and*
 a quick fuzz pass before considering work complete.
 

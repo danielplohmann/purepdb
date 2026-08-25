@@ -141,6 +141,31 @@ def test_a_memoryview_is_read_the_same_as_bytes():
     assert MsfFile(memoryview(data)).read_stream(0) == payload
 
 
+def test_a_memoryview_in_units_other_than_bytes_is_still_read_in_bytes():
+    """`len()` and slicing on a memoryview count elements, and an element is a
+    byte only for a one-dimensional view of format "B". A view the caller cast
+    to four-byte elements measured the file at a quarter its size, so a
+    perfectly good PDB was rejected as truncated; a two-dimensional one
+    measured its first dimension, so the superblock alone looked too big to
+    fit."""
+    payload = b"hello world"
+    data = build_msf([payload])
+
+    assert MsfFile(memoryview(data).cast("I")).read_stream(0) == payload
+    assert MsfFile(memoryview(data).cast("B", (6, 512))).read_stream(0) == payload
+
+
+def test_a_memoryview_that_cannot_be_read_as_bytes_raises_msf_error():
+    """A strided view's bytes are not the file's, and slicing it by byte
+    offsets would read the wrong ones rather than fail. Reaching
+    `struct.unpack_from` with it raised `BufferError` -- past the boundary
+    `PdbError` is supposed to be the whole of."""
+    data = build_msf([b"hello world"])
+
+    with pytest.raises(MsfError, match="C-contiguous"):
+        MsfFile(memoryview(data)[::2])
+
+
 def test_a_foreign_format_handed_in_as_a_buffer_is_still_named():
     """The magic test was `data.startswith(...)`, which a memory map does not
     have. Naming the format is the whole value of that branch -- losing it

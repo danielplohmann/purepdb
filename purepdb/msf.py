@@ -38,6 +38,34 @@ from dataclasses import dataclass
 # in place of a real buffer.
 Buffer = bytes | bytearray | memoryview | mmap.mmap
 
+
+def _byte_view(data: Buffer) -> Buffer:
+    """`data` measured and sliced in bytes, whatever units it arrived in.
+
+    `len()` and slicing on a memoryview count *elements*, and an element is a
+    byte only for a one-dimensional view of format "B". A caller who cast one
+    -- `memoryview(data).cast("I")` is four bytes to the element -- would have
+    every length here come out a quarter of the truth, which rejected a
+    perfectly good file as truncated. A multidimensional view is worse: `len()`
+    is its first dimension, so the superblock alone looked too big for the
+    file. Everything else this accepts already counts in bytes.
+    """
+    if not isinstance(data, memoryview):
+        return data
+    if data.c_contiguous and data.format == "B" and data.ndim == 1:
+        return data
+    try:
+        return data.cast("B")
+    except TypeError as exc:
+        # `cast` refuses a strided view and an exotic element format. Slicing
+        # either one by byte offsets would read the wrong bytes rather than
+        # fail, and reaching `unpack_from` with it raised `BufferError` --
+        # past the boundary `PdbError` is supposed to be the whole of.
+        raise MsfError(
+            f"this memoryview cannot be read as bytes ({exc}); pass a "
+            f"C-contiguous view, or the bytes themselves"
+        ) from exc
+
 # 32-byte magic for the MSF 7.00 ("big") format.
 BIG_MSF_MAGIC = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00"
 
@@ -111,13 +139,16 @@ class MsfFile:
     """Random-access reader over the streams inside an MSF container."""
 
     def __init__(self, data: Buffer):
-        self._data = data
-        self.super = SuperBlock.parse(data)
+        # Normalised first, and everything below reads the result: a length
+        # taken in the caller's units rather than in bytes is not a smaller
+        # answer, it is the wrong one.
+        self._data = _byte_view(data)
+        self.super = SuperBlock.parse(self._data)
         expected = self.super.num_blocks * self.super.block_size
-        if len(data) < expected:
+        if len(self._data) < expected:
             raise MsfError(
                 f"file truncated: header claims {self.super.num_blocks} blocks "
-                f"({expected} bytes) but only {len(data)} bytes present"
+                f"({expected} bytes) but only {len(self._data)} bytes present"
             )
         # stream_sizes[i] is None for a nil stream, else its byte length.
         # stream_blocks[i] is the ordered list of block indices for stream i.
