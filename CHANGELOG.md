@@ -14,6 +14,18 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
+### Added
+
+- `MsfFile` and `PDB.from_bytes` accept any buffer — `bytes`, a `memoryview`,
+  or an `mmap.mmap` — rather than `bytes` alone. Reading a handful of streams
+  out of files that run to hundreds of megabytes is what a memory map is for,
+  and the annotation was the only thing standing in the way; the container
+  reader needs a length, slicing and the buffer protocol, all of which a
+  mapping has. The magic test that names a Portable PDB or an MSF 2.00 file
+  now slices rather than calling `startswith`, which a mapping does not have —
+  losing that branch would answer "bad magic" for every Portable PDB in a
+  swept directory.
+
 ### Fixed
 
 - A stream directory whose block map spans more than one block is read instead
@@ -25,7 +37,6 @@ resolve *differently* would be breaking, and would say so here.
   clean: 3354 streams, 63000 procedure records, 55147 functions, no malformed
   records and no truncations. `tests/_synth.py` had the mirror-image assumption
   and would silently resize its own buffer past the block it had reserved.
-
 ## [0.4.0] - 2026-08-24
 
 ### Added
