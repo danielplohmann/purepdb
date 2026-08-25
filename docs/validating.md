@@ -106,15 +106,24 @@ compared nothing, and a test asserts that every check is in that gate — so a
 tenth check cannot be added without one.
 
 The mirror-image failure is a harness that reports a disagreement it never had,
-and the first nightly run found two of those in one file each. `llvm-pdbutil`
-will not print section contributions for a PDB with no section-header stream,
-and will not open the IPI of a PDB whose info stream does not advertise one —
-both of which the corpus holds on purpose. Neither is a comparison that came
-out different; both are the reference implementation declining to answer, and
-they are now skipped with the reason printed rather than counted against
-purepdb. A skip is deliberately not agreement: it leaves the check out of the
-gate above, so a check no file in the corpus could answer for still fails the
-run.
+and the first nightly run found two of those in one file each. Both are the
+reference implementation declining to answer rather than a comparison that came
+out different, and they are answered differently because they cost different
+amounts.
+
+`llvm-pdbutil` will not print section contributions for a PDB with no
+section-header stream, and there is then no reference answer at all: those two
+checks are **skipped** for that file, with the reason printed. A skip is
+deliberately not agreement — it leaves the check out of the gate above, so a
+check no file in the corpus could answer for still fails the run.
+
+It also will not open the IPI of a PDB whose info stream does not advertise
+one, and there the loss is a single field: every inlinee id resolves against
+the TPI, so the *name* is wrong while the id and the code ranges are still
+llvm's own reading. That check is **narrowed**, not skipped — the name is left
+out of the tuples on both sides, a note says so, and the sites are compared and
+counted like any others. Skipping the whole check there would throw away 140
+verified comparisons to avoid one bad field.
 
 Where the two implementations genuinely read the same bytes differently, the
 harness has to say which reading it is comparing and why. `llvm-pdbutil` moves

@@ -24,7 +24,12 @@ resolve *differently* would be breaking, and would say so here.
   mapping has. The magic test that names a Portable PDB or an MSF 2.00 file
   now slices rather than calling `startswith`, which a mapping does not have —
   losing that branch would answer "bad magic" for every Portable PDB in a
-  swept directory.
+  swept directory. A memoryview is normalised to a one-dimensional view of
+  bytes first, because `len()` and slicing on one count *elements*: a view cast
+  to four-byte elements measured a file at a quarter its size and had it
+  rejected as truncated, and a strided view, whose bytes are not the file's at
+  all, is refused as an `MsfError` rather than left to raise `BufferError` out
+  of `struct`.
 
 ### Fixed
 
