@@ -42,6 +42,23 @@ resolve *differently* would be breaking, and would say so here.
   clean: 3354 streams, 63000 procedure records, 55147 functions, no malformed
   records and no truncations. `tests/_synth.py` had the mirror-image assumption
   and would silently resize its own buffer past the block it had reserved.
+- The `diagnose()` warning that the globals index and the module walk disagree
+  fired on 18 of the 39 readable PDBs in a 2.5 GB corpus with nothing missing
+  from any of them, and asserted a conclusion it could not reach: *"Both
+  describe the same set, so one of them is being read incompletely."* They are
+  not the same set. The index also names managed methods — 16 of those 18 files
+  are managed, where every `S_PROCREF` points at an `S_GMANPROC` that purepdb
+  reports as no native procedure, which the warning about managed code already
+  says — and import thunks, whose module stream carries `S_THUNK32` rather than
+  `S_*PROC32` and which `functions()` reports anyway, as an alias of the public
+  at the same address. `diagnose()` now resolves every ref to the record it
+  points at and warns only on the ones nothing accounts for, naming the kind it
+  found. `Diagnostics.proc_ref_targets` is that classification,
+  `Diagnostics.unresolvable_proc_refs` the refs whose target could not be read
+  at all, and `Diagnostics.unmatched_proc_refs` the sum the warning fires on. A
+  warning that fires on 46% of real files teaches a reader to skip the list,
+  which is what the entries that matter are then lost in — the same reasoning
+  that took the thread-local warning out in 0.4.0.
 - `dev/validate_against_llvm.py` reported two files as disagreeing with
   `llvm-pdbutil` where the comparison was the thing at fault, which is what the
   first nightly cross-check run turned up. A dump the tool declines to produce

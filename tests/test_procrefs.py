@@ -233,12 +233,12 @@ def test_the_two_counts_agree_on_every_fixture(rel):
     assert not any("globals index" in w for w in d.warnings)
 
 
-def test_a_disagreement_is_named_with_both_counts():
+def test_a_ref_pointing_at_nothing_readable_is_a_disagreement():
     """One proc in the module stream, two refs in the globals index.
 
-    A PDB is not malformed for disagreeing, so this is a warning rather than an
-    error -- but one of the two paths is reading less than the file describes,
-    and that is worth saying.
+    A PDB is not malformed for this, so it is a warning rather than an error --
+    but the second ref names a procedure at an offset with no record at it, so
+    the module walk really is reading less than the file describes.
     """
     pdb = _pdb([gproc32("main", 1, 0x10)],
                symrecords=proc_ref("main", module=1, sym_offset=4)
@@ -246,10 +246,98 @@ def test_a_disagreement_is_named_with_both_counts():
 
     d = pdb.diagnose()
     assert (d.proc_refs, d.proc_records) == (2, 1)
+    assert (d.unresolvable_proc_refs, d.unmatched_proc_refs) == (1, 1)
     warning = next(w for w in d.warnings if "globals index" in w)
-    assert "2 procedures" in warning
-    assert "hold 1" in warning
-    assert "module walk is short by 1" in warning
+    assert "1 of the 2 procedures" in warning
+    assert "could not be read" in warning
+
+
+def test_refs_onto_managed_methods_are_not_a_disagreement():
+    """The shape 16 of 39 real PDBs have: a managed file indexes every method
+    it describes, and purepdb reports none of them as native procedures. The
+    warning about managed code says so; a second one saying the module walk is
+    short does not, and contradicts the first."""
+    from tests._synth import manproc
+
+    pdb = _pdb([manproc("Program.Main", token=0x06000001)],
+               symrecords=proc_ref("Program.Main", module=1, sym_offset=4))
+
+    d = pdb.diagnose()
+    assert (d.proc_refs, d.proc_records) == (1, 0)
+    assert d.proc_ref_targets == {codeview.S_GMANPROC: 1}
+    assert d.unmatched_proc_refs == 0
+    assert not any("globals index" in w for w in d.warnings)
+    assert any("managed" in w for w in d.warnings)
+
+
+def test_refs_onto_import_thunks_are_not_a_disagreement():
+    """The other shape the corpus has: a driver PDB whose imports carry
+    S_THUNK32 rather than S_GPROC32. `functions()` reports them, so nothing is
+    missing to warn about."""
+    from tests._synth import thunk32
+
+    records = gproc32("main", 1, 0x10) + thunk32("DbgPrint", 1, 0x40)
+    pdb = _pdb([records],
+               symrecords=proc_ref("main", module=1, sym_offset=4)
+               + proc_ref("DbgPrint", module=1,
+                          sym_offset=4 + len(gproc32("main", 1, 0x10))))
+
+    d = pdb.diagnose()
+    assert (d.proc_refs, d.proc_records) == (2, 1)
+    assert d.proc_ref_targets == {codeview.S_GPROC32: 1, codeview.S_THUNK32: 1}
+    assert d.unmatched_proc_refs == 0
+    assert not any("globals index" in w for w in d.warnings)
+    assert "DbgPrint" in {f.name for f in pdb.functions()}
+
+
+def test_a_ref_onto_a_kind_nothing_accounts_for_names_that_kind():
+    """The case the warning is for, and the one the corpus never produced."""
+    from tests._synth import gdata32
+
+    pdb = _pdb([gdata32("g_counter", 2, 0x10)],
+               symrecords=proc_ref("g_counter", module=1, sym_offset=4))
+
+    d = pdb.diagnose()
+    assert d.unmatched_proc_refs == 1
+    warning = next(w for w in d.warnings if "globals index" in w)
+    assert "S_GDATA32" in warning
+
+
+def _count_stream_reads(pdb):
+    """Every stream index `diagnose()` reads, in order."""
+    reads: list[int] = []
+    inner = pdb.msf.read_stream
+
+    def counting(index):
+        reads.append(index)
+        return inner(index)
+
+    pdb.msf.read_stream = counting  # type: ignore[method-assign]
+    pdb.diagnose()
+    return reads
+
+
+def test_resolving_refs_costs_one_read_per_module_however_they_are_ordered():
+    """The stream cache holds one stream, so resolving refs in the order the
+    file happens to store them is a read per ref rather than per module. On the
+    393 MB file in the corpus, whose refs revisit modules throughout, that is
+    106s against 0.9s -- the difference between a diagnostic and one nobody
+    waits for. Measured as what the refs add over the same file without them,
+    since `diagnose()` reads each module stream a few times regardless."""
+    modules = [gproc32("a", 1, 0x10), gproc32("b", 1, 0x20)]
+    alternating = b"".join([
+        proc_ref("a", module=1, sym_offset=4),
+        proc_ref("b", module=2, sym_offset=4),
+        proc_ref("a", module=1, sym_offset=4),
+        proc_ref("b", module=2, sym_offset=4),
+    ])
+
+    without = _count_stream_reads(_pdb(modules))
+    with_refs = _count_stream_reads(_pdb(modules, symrecords=alternating))
+
+    # Streams 5 and 6 are the two module streams. Four refs that alternate
+    # between them add one read each, not one per ref.
+    assert [with_refs.count(i) - without.count(i) for i in (5, 6)] == [1, 1]
 
 
 def test_a_pdb_with_no_refs_at_all_is_not_a_disagreement():
