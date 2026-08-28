@@ -229,8 +229,22 @@ class Diagnostics:
     proc_refs: int = 0
     """S_PROCREF/S_LPROCREF records: the globals' index of every procedure.
 
-    The same set `proc_records` counts, reached by a different route, so the
-    two agreeing is an integrity check on both."""
+    Close to the set `proc_records` counts, reached by a different route, but
+    not the same set: the index also names managed methods and import thunks,
+    which the module walk does not report as procedures. `proc_ref_targets` is
+    what the two counts differing has to be read through."""
+    proc_ref_targets: dict[int, int] = field(default_factory=dict)
+    """What each S_PROCREF actually points at, counted by record kind.
+
+    Empty when there is no symbol-record stream. The kinds seen on real input
+    are the procedure kinds, S_THUNK32 -- an import thunk, which `functions()`
+    reports as an alias of the public at the same address -- and the managed
+    kinds, which `managed_proc_records` already explains. Anything else is a
+    procedure named by the index that purepdb does not report."""
+    unresolvable_proc_refs: int = 0
+    """S_PROCREF records whose target could not be read at all: a module index
+    past the module list, a module with no stream, an offset past the end of
+    it, or a record whose length is damaged."""
     line_bytes: int = 0
     """Bytes of C13 line info across all module streams. Non-zero with
     `has_string_table` false means `lines()` yields nothing despite the data
@@ -291,6 +305,23 @@ class Diagnostics:
 
         return sum(n for kind, n in self.module_kinds.items()
                    if kind in codeview.MANAGED_PROC_KINDS)
+
+    @property
+    def unmatched_proc_refs(self) -> int:
+        """S_PROCREF entries pointing at nothing purepdb reports.
+
+        The honest form of "the globals index and the module walk disagree".
+        Refs onto a procedure are reported by `functions()`; onto a thunk,
+        likewise; onto a managed method, by the warning about managed code. The
+        remainder -- an unreadable target, or a record of some kind none of
+        those cover -- is the part that means a procedure is missing."""
+        from . import codeview
+
+        accounted = (codeview.PROC_KINDS | codeview.MANAGED_PROC_KINDS
+                     | {codeview.S_THUNK32})
+        return self.unresolvable_proc_refs + sum(
+            n for kind, n in self.proc_ref_targets.items()
+            if kind not in accounted)
 
     @property
     def warnings(self) -> list[str]:
@@ -399,13 +430,22 @@ class Diagnostics:
                 f"the {self.modules} module(s) before it were read and any after "
                 f"it were not, so their symbols are missing"
             )
-        if self.proc_refs and self.proc_refs != self.proc_records:
-            short = "module walk" if self.proc_refs > self.proc_records else "globals index"
+        if self.unmatched_proc_refs:
+            named = {kind: n for kind, n in self.proc_ref_targets.items()
+                     if kind not in (codeview.PROC_KINDS
+                                     | codeview.MANAGED_PROC_KINDS
+                                     | {codeview.S_THUNK32})}
+            parts = [f"{n} at {codeview.kind_name(kind)}"
+                     for kind, n in sorted(named.items(), key=lambda kv: -kv[1])]
+            if self.unresolvable_proc_refs:
+                parts.append(f"{self.unresolvable_proc_refs} at an offset that "
+                             f"could not be read")
             out.append(
-                f"the globals index names {self.proc_refs} procedures and the "
-                f"module streams hold {self.proc_records}; the {short} is short "
-                f"by {abs(self.proc_refs - self.proc_records)}. Both describe "
-                f"the same set, so one of them is being read incompletely"
+                f"{self.unmatched_proc_refs} of the {self.proc_refs} procedures "
+                f"the globals index names point at no record purepdb reports "
+                f"({'; '.join(parts)}); the module walk is short by that much, "
+                f"and those procedures reach functions() only if a public "
+                f"record names them"
             )
         if self.undecoded_constants:
             out.append(
@@ -706,17 +746,27 @@ class PDB:
         Proc refs arrive grouped by module -- 3539 of them span 29 runs on
         sqlite3 x86 -- so holding one stream turns a read per ref into a read
         per module, and bounds the memory at a single stream.
+
+        Grouped on the files anyone writes tests against, at least. One 393 MB
+        PDB in the corpus revisits modules throughout its 240971 refs, where a
+        single-stream cache degrades to a read per ref; that is why `diagnose()`
+        sorts before it resolves rather than relying on the file's order.
         """
         if self._stream_cache_index != index:
             self._stream_cache = self.msf.read_stream(index)
             self._stream_cache_index = index
         return self._stream_cache
 
-    def resolve_proc_ref(self, ref: codeview.ProcRef) -> codeview.ProcSymbol | None:
-        """Read the proc record a ProcRef points at, or None if it does not.
+    def _proc_ref_target(self, ref: codeview.ProcRef) -> tuple[int, bytes] | None:
+        """The kind and payload of the record a ProcRef points at, or None.
 
         The offset is into the module stream as stored, signature included, so
         it is used against the raw stream rather than the symbol region.
+
+        Separate from `resolve_proc_ref` because the kind is the answer to a
+        question of its own: a ref pointing at a record that is not a procedure
+        is not the same as a ref pointing nowhere, and `diagnose()` has to tell
+        those apart to say whether anything is actually missing.
         """
         if not 0 <= ref.module_index < len(self.dbi.modules):
             return None
@@ -728,10 +778,17 @@ class PDB:
             return None
         rec_len, kind = struct.unpack_from("<HH", raw, ref.sym_offset)
         end = ref.sym_offset + 2 + rec_len
-        if rec_len < 2 or kind not in codeview.PROC_KINDS or end > len(raw):
+        if rec_len < 2 or end > len(raw):
+            return None
+        return kind, raw[ref.sym_offset + 4 : end]
+
+    def resolve_proc_ref(self, ref: codeview.ProcRef) -> codeview.ProcSymbol | None:
+        """Read the proc record a ProcRef points at, or None if it does not."""
+        target = self._proc_ref_target(ref)
+        if target is None or target[0] not in codeview.PROC_KINDS:
             return None
         try:
-            return codeview.parse_proc(kind, raw[ref.sym_offset + 4 : end])
+            return codeview.parse_proc(*target)
         except EOFError:
             # RecordLen is the record's own claim; a short one is damage, not
             # a proc we can read.
@@ -1074,7 +1131,8 @@ class PDB:
                 truncations.append((f"module {mod.index} ({mod.module_name})", t))
 
         idx = self.dbi.symrecord_stream_index
-        proc_refs = undecoded_constants = 0
+        proc_refs = undecoded_constants = unresolvable_refs = 0
+        proc_ref_targets: dict[int, int] = {}
         thread_locals = sum(kinds.get(k, 0) for k in codeview.THREAD_KINDS)
         if self.msf.is_valid_stream(idx):
             symrecords = self.msf.read_stream(idx)
@@ -1088,6 +1146,23 @@ class PDB:
             symrecord_kinds = codeview.count_kinds(symrecords)
             proc_refs = sum(symrecord_kinds.get(k, 0)
                             for k in codeview.PROC_REF_KINDS)
+            # What those refs point at, which is the only way to say whether a
+            # count differing from `proc_records` means anything is missing.
+            # Grouped by module because the stream cache holds one stream: on
+            # the 393 MB file in the corpus, whose 240971 refs arrive in an
+            # order that revisits modules, resolving them as they come re-read
+            # module streams for 106s against 0.9s grouped. A ref too short to
+            # parse is skipped by `extract_proc_refs` and counted in
+            # `malformed_records` already, which is where it is reported.
+            refs = codeview.extract_proc_refs(symrecords)
+            refs.sort(key=lambda ref: ref.module_index)
+            for ref in refs:
+                target = self._proc_ref_target(ref)
+                if target is None:
+                    unresolvable_refs += 1
+                else:
+                    proc_ref_targets[target[0]] = (
+                        proc_ref_targets.get(target[0], 0) + 1)
             thread_locals += sum(symrecord_kinds.get(k, 0)
                                  for k in codeview.THREAD_KINDS)
 
@@ -1117,6 +1192,8 @@ class PDB:
                                    - malformed_inline
                                    - len(self.inline_sites())),
             proc_refs=proc_refs,
+            proc_ref_targets=proc_ref_targets,
+            unresolvable_proc_refs=unresolvable_refs,
             line_bytes=line_bytes,
             has_string_table=self.string_table() is not None,
             pdb_info_error=pdb_info_error,

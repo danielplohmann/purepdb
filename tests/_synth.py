@@ -135,6 +135,26 @@ def thunk32(name: str, segment: int, offset: int, length: int = 6,
     return make_record(0x1102, payload)
 
 
+def manproc(name: str, *, token: int, segment: int = 1, offset: int = 0x10,
+            code_size: int = 0x10, kind: int = 0x112A) -> bytes:
+    """S_GMANPROC: a .NET method, keyed by metadata token.
+
+    purepdb counts these and decodes none of them -- they have no rva to
+    resolve -- so the layout matters only for the record length being right.
+    """
+    payload = struct.pack(
+        "<IIIIIIIIHBH",
+        0, 0, 0,            # parent, end, next
+        code_size,
+        0, code_size,       # debug start, debug end
+        token,
+        offset, segment,
+        0,                  # flags
+        0,                  # return register
+    ) + name.encode() + b"\x00"
+    return make_record(kind, payload)
+
+
 def label32(name: str, segment: int, offset: int, flags: int = 0) -> bytes:
     payload = struct.pack("<IHB", offset, segment, flags) + name.encode() + b"\x00"
     return make_record(0x1105, payload)

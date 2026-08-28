@@ -188,9 +188,15 @@ The valuable part was the two things it found that **no fixture could**:
   empty result with a diagnostic but a refusal. Every fixture in the repository
   is small enough that its block map fits in one block, so no amount of
   synthetic testing around the fixtures would have reached it.
-* A `diagnose()` warning that fires on 41% of real files with nothing wrong. All
-  seven fixtures agree on the two counts it compares, so the suite is blind to
-  it by construction.
+* A `diagnose()` warning that fired on 18 of the 39 readable files with nothing
+  wrong — a managed PDB indexes methods purepdb reports as no native procedure,
+  and a driver PDB indexes import thunks. All seven fixtures agree on the two
+  counts it compared, so the suite was blind to it by construction. Fixed by
+  resolving each ref to the record it points at rather than comparing two
+  totals, which costs about 3% of a `diagnose()` on the largest file in the
+  corpus — provided the refs are grouped by module first, since the stream
+  cache holds one stream and one 393 MB file stores them in an order that
+  revisits modules throughout: 106s ungrouped against 0.9s grouped.
 
 The lesson generalises past this project. A fixture corpus encodes the shapes
 you already know about; its blind spots are exactly the shapes you have not

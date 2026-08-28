@@ -123,6 +123,17 @@ def _diagnose(pdb: PDB) -> None:
           f"({d.modules_with_symbols} with symbols)")
     print(f"proc records       : {d.proc_records} "
           f"({d.proc_refs} in the globals index)")
+    # Printed only when the two counts above differ for a reason, so that the
+    # difference is not left looking like something went wrong. A managed file
+    # is the common case: every entry in the index is a method with no rva.
+    other = {kind: n for kind, n in d.proc_ref_targets.items()
+             if kind not in codeview.PROC_KINDS}
+    if other or d.unresolvable_proc_refs:
+        named = [f"{n} {codeview.kind_name(kind)}"
+                 for kind, n in sorted(other.items(), key=lambda kv: -kv[1])]
+        if d.unresolvable_proc_refs:
+            named.append(f"{d.unresolvable_proc_refs} unreadable")
+        print(f"  index also names : {', '.join(named)}")
     print(f"public records     : {d.public_records}")
     print(f"inline sites       : {d.inline_sites}")
     print(f"labels             : {d.labels}")

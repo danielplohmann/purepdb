@@ -456,6 +456,40 @@ def test_diagnose(sample, capsys):
     assert "modules            : 2 (1 with symbols)" in out
     assert "labels             : 1" in out
     assert "inline sites       : 1" in out
+    assert not any("index also names" in line for line in out), (
+        "every ref in the sample points at a procedure, so there is nothing "
+        "to explain about the two counts")
+
+
+def test_diagnose_says_what_else_the_globals_index_names(tmp_path, capsys):
+    """A count of refs above the count of procs is the normal shape for a file
+    whose imports carry thunks, and the report has to say why rather than
+    leaving the reader to conclude the module walk came up short."""
+    from tests._synth import proc_ref, thunk32
+
+    records = gproc32("main", 1, 0x40) + thunk32("DbgPrint", 1, 0x80)
+    module_stream = module_sym_stream(records)
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_stream))
+    symrecords = (proc_ref("main", module=1, sym_offset=4)
+                  + proc_ref("DbgPrint", module=1,
+                             sym_offset=4 + len(gproc32("main", 1, 0x40))))
+    streams = [
+        b"", pdb_info_stream({}), b"",
+        dbi_stream(public_stream=8, symrecord_stream=7, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [6]),
+        b"", module_stream, section_header(".text", 0x1000, 0x10000),
+        symrecords, publics_hash_stream([]),
+    ]
+    path = tmp_path / "thunks.pdb"
+    path.write_bytes(build_msf(streams))
+
+    out, err = _run(capsys, "diagnose", str(path))
+    assert "proc records       : 1 (2 in the globals index)" in out
+    assert "  index also names : 1 S_THUNK32" in out
+    assert not any("globals index" in line for line in err), (
+        "nothing is missing, so this is a note in the report and not a warning"
+    )
 
 
 # --- the properties that make the output greppable --------------------------
