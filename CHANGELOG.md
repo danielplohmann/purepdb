@@ -14,6 +14,10 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-08-28
+
 ### Added
 
 - `MsfFile` and `PDB.from_bytes` accept any buffer — `bytes`, a `memoryview`,
@@ -263,7 +267,8 @@ resolve *differently* would be breaking, and would say so here.
 The first release documented here. See the repository history for what it
 contained; entries above describe changes made since it.
 
-[Unreleased]: https://github.com/danielplohmann/purepdb/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/danielplohmann/purepdb/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/danielplohmann/purepdb/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/danielplohmann/purepdb/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/danielplohmann/purepdb/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/danielplohmann/purepdb/releases/tag/v0.2.0
