@@ -698,6 +698,20 @@ class PDB:
             return publics
         return sorted(publics, key=lambda p: rank[p.record_offset])
 
+    def _module_symbol_bytes_and_offset(self, mod) -> tuple[bytes, int]:
+        """The symbol-record region of one module's stream, and the signature offset.
+
+        Returns (bytes, CV_SIGNATURE_SIZE) when a CV_SIGNATURE_C13 signature was
+        stripped, or (bytes, 0) otherwise.
+        """
+        if not mod.has_symbols or not self.msf.is_valid_stream(mod.sym_stream):
+            return b"", 0
+        raw = self.msf.read_stream(mod.sym_stream)
+        end = min(mod.sym_byte_size, len(raw))
+        if len(raw) >= 4 and struct.unpack_from("<I", raw, 0)[0] == CV_SIGNATURE_C13:
+            return raw[4:end], CV_SIGNATURE_SIZE
+        return raw[:end], 0
+
     def module_symbol_bytes(self, mod) -> bytes:
         """The symbol-record region of one module's stream, signature stripped.
 
@@ -707,13 +721,7 @@ class PDB:
         line-info bytes as if they were records. Returns b"" when the module
         has no symbols.
         """
-        if not mod.has_symbols or not self.msf.is_valid_stream(mod.sym_stream):
-            return b""
-        raw = self.msf.read_stream(mod.sym_stream)
-        end = min(mod.sym_byte_size, len(raw))
-        if len(raw) >= 4 and struct.unpack_from("<I", raw, 0)[0] == CV_SIGNATURE_C13:
-            return raw[4:end]
-        return raw[:end]
+        return self._module_symbol_bytes_and_offset(mod)[0]
 
     def module_c13_bytes(self, mod) -> bytes:
         """The C13 line-info region of one module's stream.
@@ -878,7 +886,7 @@ class PDB:
         ids = self.id_table()
         out: list[InlineFunction] = []
         for mod in self.dbi.modules:
-            body = self.module_symbol_bytes(mod)
+            body, base_offset = self._module_symbol_bytes_and_offset(mod)
             if not body:
                 continue
             procs: list[tuple[int, codeview.ProcSymbol]] = []
@@ -886,10 +894,10 @@ class PDB:
             for rec in codeview.iter_records(body):
                 try:
                     if rec.kind in codeview.PROC_KINDS:
-                        procs.append((rec.offset + CV_SIGNATURE_SIZE,
+                        procs.append((rec.offset + base_offset,
                                       codeview.parse_proc(rec.kind, rec.payload)))
                     elif rec.kind == codeview.S_INLINESITE:
-                        sites.append((rec.offset + CV_SIGNATURE_SIZE,
+                        sites.append((rec.offset + base_offset,
                                       codeview.parse_inline_site(rec.payload)))
                 except EOFError:
                     continue  # shorter than its kind requires; skip the record
