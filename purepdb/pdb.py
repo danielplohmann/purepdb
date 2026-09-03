@@ -293,6 +293,8 @@ class Diagnostics:
     files teaches a reader to skip the list, which costs the entries that do
     matter. The count and the note beside it in `purepdb diagnose` are the
     explanation, in the report rather than in the alarm channel."""
+    c13_truncations: list[tuple[str, c13.C13Truncation]] = field(default_factory=list)
+    """Where a C13 line-info walk stopped short of consuming its buffer, and why."""
 
     @property
     def truncated_streams(self) -> int:
@@ -465,6 +467,13 @@ class Diagnostics:
                 f"{self.line_bytes} bytes of C13 line info are present but the "
                 f"/names stream is not, so file-name offsets cannot be resolved "
                 f"and lines() yields nothing"
+            )
+        if self.c13_truncations:
+            where, first = self.c13_truncations[0]
+            out.append(
+                f"{len(self.c13_truncations)} C13 line-info section(s) stopped early; "
+                f"lines after that point are missing. First: {where} at "
+                f"byte {first.offset:#x} ({first.reason})"
             )
         if self.pdb_info_error is not None:
             out.append(
@@ -1120,8 +1129,17 @@ class PDB:
         malformed = 0
         malformed_inline = 0
         line_bytes = 0
+        c13_truncations: list[tuple[str, c13.C13Truncation]] = []
         for mod in self.dbi.modules:
-            line_bytes += len(self.module_c13_bytes(mod))
+            c13_bytes = self.module_c13_bytes(mod)
+            line_bytes += len(c13_bytes)
+            if c13_bytes:
+                mod_c13_report: list[c13.C13Truncation] = []
+                for sub in c13.iter_subsections(c13_bytes, truncation=mod_c13_report):
+                    if sub.kind == c13.DEBUG_S_LINES:
+                        c13.parse_lines(sub.payload, truncation=mod_c13_report)
+                for t in mod_c13_report:
+                    c13_truncations.append((f"module {mod.index} ({mod.module_name})", t))
             body = self.module_symbol_bytes(mod)
             if not body:
                 continue
@@ -1204,6 +1222,7 @@ class PDB:
             pdb_info_error=pdb_info_error,
             module_list_stopped_at=self.dbi.module_list_stopped_at,
             thread_local_records=thread_locals,
+            c13_truncations=c13_truncations,
         )
 
     def _is_code(self, segment: int) -> bool:
