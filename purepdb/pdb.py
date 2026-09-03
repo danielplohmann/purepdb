@@ -1115,6 +1115,10 @@ class PDB:
         malformed = 0
         malformed_inline = 0
         line_bytes = 0
+        # Collected from the same `body` the counts below come from.
+        # `module_procs()` re-reads and re-slices every module stream to
+        # answer a length this loop is already holding the bytes for.
+        procs: list[codeview.ProcSymbol] = []
         for mod in self.dbi.modules:
             line_bytes += len(self.module_c13_bytes(mod))
             body = self.module_symbol_bytes(mod)
@@ -1129,10 +1133,12 @@ class PDB:
                 kinds[kind] = kinds.get(kind, 0) + count
             for t in report:
                 truncations.append((f"module {mod.index} ({mod.module_name})", t))
+            procs.extend(codeview.extract_procs(body))
 
         idx = self.dbi.symrecord_stream_index
         proc_refs = undecoded_constants = unresolvable_refs = 0
         proc_ref_targets: dict[int, int] = {}
+        public_records = 0
         thread_locals = sum(kinds.get(k, 0) for k in codeview.THREAD_KINDS)
         if self.msf.is_valid_stream(idx):
             symrecords = self.msf.read_stream(idx)
@@ -1146,6 +1152,10 @@ class PDB:
             symrecord_kinds = codeview.count_kinds(symrecords)
             proc_refs = sum(symrecord_kinds.get(k, 0)
                             for k in codeview.PROC_REF_KINDS)
+            # Likewise `public_symbols()`, which would read this stream a
+            # second time and then order it through the publics hash -- an
+            # ordering the count discards.
+            public_records = len(codeview.extract_publics(symrecords))
             # What those refs point at, which is the only way to say whether a
             # count differing from `proc_records` means anything is missing.
             # Grouped by module because the stream cache holds one stream: on
@@ -1169,8 +1179,8 @@ class PDB:
         return Diagnostics(
             modules=len(self.dbi.modules),
             modules_with_symbols=with_symbols,
-            proc_records=len(self.module_procs()),
-            public_records=len(self.public_symbols()),
+            proc_records=len(procs),
+            public_records=public_records,
             has_section_headers=self._sections is not None,
             module_kinds=kinds,
             malformed_records=malformed,
