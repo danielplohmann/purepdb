@@ -1046,7 +1046,12 @@ class PDB:
 
         `/names` and `/LinkInfo` are what real linkers put here.
         """
-        return parse_named_stream_map(self.msf.read_stream(STREAM_PDB_INFO))
+        if not self.msf.is_valid_stream(STREAM_PDB_INFO):
+            return {}
+        try:
+            return parse_named_stream_map(self.msf.read_stream(STREAM_PDB_INFO))
+        except MsfError:
+            return {}
 
     def string_table(self) -> StringTable | None:
         """The `/names` global string table, or None when the PDB has none."""
