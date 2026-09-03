@@ -8,7 +8,9 @@ assertions target -- a count of zero has to fail loudly here.
 
 import struct
 
-from purepdb import PDB
+import pytest
+
+from purepdb import PDB, MsfError
 from purepdb.gsi import PublicsStream
 from tests._synth import (
     build_msf,
@@ -139,3 +141,12 @@ def test_folded_addresses_keep_every_name_as_an_alias():
     assert set(fn.aliases) == {"?fold_a@@YAXXZ", "?fold_b@@YAXXZ"}
     assert fn.names[0] == "fold_a"
     assert len(fn.names) == 3
+
+
+def test_publics_stream_parse_raises_msf_error_on_truncated_data():
+    with pytest.raises(MsfError):
+        PublicsStream.parse(b"")
+    # Header claims 100 bytes of address map, but buffer only has the 28-byte header.
+    hdr = struct.pack("<IIIIHHII", 0, 100, 0, 0, 0, 0, 0, 0)
+    with pytest.raises(MsfError):
+        PublicsStream.parse(hdr)

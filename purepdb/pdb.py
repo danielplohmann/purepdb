@@ -665,7 +665,7 @@ class PDB:
             return None
         try:
             return PublicsStream.parse(self.msf.read_stream(idx))
-        except (ValueError, struct.error):
+        except (MsfError, struct.error):
             return None
 
     def public_symbols(self) -> list[codeview.PublicSymbol]:
