@@ -58,10 +58,5 @@ class Reader:
         self.pos = end + 1
         return s.decode("utf-8", errors="replace")
 
-    def align(self, boundary: int) -> None:
-        rem = self.pos % boundary
-        if rem:
-            self.pos += boundary - rem
-
     def seek(self, pos: int) -> None:
         self.pos = pos

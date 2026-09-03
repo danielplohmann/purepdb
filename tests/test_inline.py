@@ -394,3 +394,35 @@ def test_a_healthy_file_reports_no_unplaced_sites():
     d = pdb.diagnose()
     assert (d.inline_sites, d.unplaced_inline_sites) == (1, 0)
     assert d.warnings == [w for w in d.warnings if "inline site" not in w]
+
+
+def test_inline_site_in_stream_without_c13_signature():
+    """When a module symbol stream does not start with CV_SIGNATURE_C13,
+    no 4-byte signature is stripped and offsets start at 0."""
+    from tests._synth import make_record
+
+    site = inline_site(inlinee=0x1000, annotations=bytes([0x0B, 0x04, 0x04, 0x03]))
+    proc = gproc32("outer", 1, 0x40, code_size=0x100)
+    end = make_record(codeview.S_END, b"")
+    end_offset = len(proc) + len(site)
+    module_records = proc[:8] + struct.pack("<I", end_offset) + proc[12:] + site + end
+
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=len(module_records))
+    streams = [
+        b"",
+        struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
+        b"",
+        dbi_stream(public_stream=6, symrecord_stream=7, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [8]),
+        ipi_stream([("func", "helper")]),
+        module_records,
+        publics_hash_stream([]),
+        b"",
+        section_header(".text", 0x1000, 0x10000),
+    ]
+    pdb = PDB.from_bytes(build_msf(streams))
+    found = pdb.inline_sites()
+    assert len(found) == 1
+    assert found[0].name == "helper"
+    assert found[0].parent == "outer"

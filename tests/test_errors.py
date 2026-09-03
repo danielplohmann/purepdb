@@ -303,3 +303,47 @@ def test_a_module_record_with_an_unterminated_name_stops_the_walk():
     pdb = PDB.from_bytes(build_msf(streams))
     assert [m.module_name for m in pdb.dbi.modules] == ["main.obj"]
     assert pdb.functions() == []
+
+
+def test_dbi_substream_corrupted_sizes_raise_msf_error():
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parent / "data" / "sqlite" / "x86" / "sqlite3.pdb"
+    if not fixture.exists():
+        pytest.skip("fixture absent")
+    pdb = PDB.open(str(fixture))
+    raw_dbi = pdb.msf.read_stream(3)
+    # Substream size slots in DBI header:
+    # 24: ModInfo, 28: SecContrib, 32: SecMap, 36: SrcInfo, 40: TSMap, 48: DbgHdr, 52: EC
+    size_offsets = [24, 28, 32, 36, 40, 48, 52]
+    for offset in size_offsets:
+        # Corrupted negative size:
+        corrupted = bytearray(raw_dbi)
+        struct.pack_into("<i", corrupted, offset, -1)
+        with pytest.raises(MsfError, match="substream size is negative"):
+            DbiStream.parse(bytes(corrupted))
+
+        # Corrupted size exceeding stream length:
+        corrupted = bytearray(raw_dbi)
+        struct.pack_into("<i", corrupted, offset, len(raw_dbi) + 100)
+        with pytest.raises(MsfError, match="runs past end of stream"):
+            DbiStream.parse(bytes(corrupted))
+
+
+def test_a_dbi_stream_shorter_than_its_header_claims_raises():
+    """A DBI stream cut short raises, rather than degrading gracefully.
+
+    Written down as a deliberate choice (see _check_substream in dbi.py):
+    once the header's own substream sizes describe bytes the stream does not
+    contain, the graceful paths -- `module_list_stopped_at`,
+    `codeview.Truncation` -- no longer apply, because those cover damage
+    inside substreams whose bounds the header describes correctly.
+    """
+    mods = module_info("main.obj", "main.obj", sym_stream=5, sym_byte_size=4)
+    data = dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
+                      dbg_header=[0xFFFF] * 5 + [6])
+    # The whole stream parses, and its module list is intact...
+    assert [m.module_name for m in DbiStream.parse(data).modules] == ["main.obj"]
+    # ...but a stream cut short is rejected outright, not partially read.
+    with pytest.raises(MsfError, match="runs past end of stream"):
+        DbiStream.parse(data[:-8])

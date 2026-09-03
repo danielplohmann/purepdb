@@ -115,6 +115,7 @@ class SectionContribution:
     module_index: int  # index into DbiStream.modules
 
     def contains(self, segment: int, offset: int) -> bool:
+        """Whether this contribution covers the given segment:offset."""
         return self.segment == segment and self.offset <= offset < self.offset + self.size
 
 
@@ -134,6 +135,7 @@ class ContributionMap:
         self._keys = [(c.segment, c.offset) for c in self._sorted]
 
     def __len__(self) -> int:
+        """Total number of contributions, including empty ones."""
         return len(self.contributions)
 
     def find(self, segment: int, offset: int) -> SectionContribution | None:
@@ -217,19 +219,53 @@ class DbiStream:
         )
 
         off = _HEADER.size
+
+        # Both checks here are deliberate, and the second one is a choice.
+        # A negative size slices backwards, aliasing the header or an earlier
+        # substream -- bytes that were never substream data at all. A size past
+        # the stream end means the header's own arithmetic disagrees with the
+        # container holding it. Both are container-level damage, so both raise:
+        # the graceful degradation further down -- a module list that stops
+        # mid-record (`module_list_stopped_at`), record walks that report a
+        # `codeview.Truncation` -- is for damage *inside* a substream whose
+        # bounds the header describes correctly. Deciding whether damage is
+        # contained is not a judgement made from bytes the header has already
+        # lied about.
+        def _check_substream(name: str, size: int) -> None:
+            if size < 0:
+                raise MsfError(f"DBI {name} substream size is negative ({size})")
+            if off + size > len(data):
+                raise MsfError(
+                    f"DBI {name} substream runs past end of stream "
+                    f"(starts at {off}, size {size}, stream length {len(data)})"
+                )
+
+        _check_substream("ModuleInfo", modinfo_size)
         self.modules, self.module_list_stopped_at = _parse_module_list(
             data[off : off + modinfo_size]
         )
         off += modinfo_size
+
+        _check_substream("SectionContribution", seccontrib_size)
         self.section_contributions = _parse_section_contributions(
             data[off : off + seccontrib_size]
         )
         off += seccontrib_size
+
+        _check_substream("SectionMap", secmap_size)
         self.section_map = parse_section_map(data[off : off + secmap_size])
         off += secmap_size
+
+        _check_substream("SourceInfo", srcinfo_size)
         off += srcinfo_size
+
+        _check_substream("TypeServerMap", tsmap_size)
         off += tsmap_size
+
+        _check_substream("EC", ec_size)
         off += ec_size
+
+        _check_substream("OptionalDebugHeader", dbg_hdr_size)
         self.dbg_header = _parse_dbg_header(data[off : off + dbg_hdr_size])
         return self
 

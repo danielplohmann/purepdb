@@ -69,6 +69,7 @@ def exercise(data: bytes) -> list:
         pdb.original_sections,
         pdb.functions(),
         pdb.public_symbols(),
+        pdb.publics_stream(),
         pdb.module_procs(),
         pdb.data_symbols(),
         pdb.thread_locals(),

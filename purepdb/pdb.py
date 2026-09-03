@@ -293,6 +293,8 @@ class Diagnostics:
     files teaches a reader to skip the list, which costs the entries that do
     matter. The count and the note beside it in `purepdb diagnose` are the
     explanation, in the report rather than in the alarm channel."""
+    c13_truncations: list[tuple[str, c13.C13Truncation]] = field(default_factory=list)
+    """Where a C13 line-info walk stopped short of consuming its buffer, and why."""
 
     @property
     def truncated_streams(self) -> int:
@@ -465,6 +467,13 @@ class Diagnostics:
                 f"{self.line_bytes} bytes of C13 line info are present but the "
                 f"/names stream is not, so file-name offsets cannot be resolved "
                 f"and lines() yields nothing"
+            )
+        if self.c13_truncations:
+            where, first = self.c13_truncations[0]
+            out.append(
+                f"{len(self.c13_truncations)} C13 line-info section(s) stopped early; "
+                f"lines after that point are missing. First: {where} at "
+                f"byte {first.offset:#x} ({first.reason})"
             )
         if self.pdb_info_error is not None:
             out.append(
@@ -665,7 +674,7 @@ class PDB:
             return None
         try:
             return PublicsStream.parse(self.msf.read_stream(idx))
-        except (ValueError, struct.error):
+        except (PdbError, struct.error):
             return None
 
     def public_symbols(self) -> list[codeview.PublicSymbol]:
@@ -689,6 +698,20 @@ class PDB:
             return publics
         return sorted(publics, key=lambda p: rank[p.record_offset])
 
+    def _module_symbol_bytes_and_offset(self, mod) -> tuple[bytes, int]:
+        """The symbol-record region of one module's stream, and the signature offset.
+
+        Returns (bytes, CV_SIGNATURE_SIZE) when a CV_SIGNATURE_C13 signature was
+        stripped, or (bytes, 0) otherwise.
+        """
+        if not mod.has_symbols or not self.msf.is_valid_stream(mod.sym_stream):
+            return b"", 0
+        raw = self.msf.read_stream(mod.sym_stream)
+        end = min(mod.sym_byte_size, len(raw))
+        if len(raw) >= 4 and struct.unpack_from("<I", raw, 0)[0] == CV_SIGNATURE_C13:
+            return raw[4:end], CV_SIGNATURE_SIZE
+        return raw[:end], 0
+
     def module_symbol_bytes(self, mod) -> bytes:
         """The symbol-record region of one module's stream, signature stripped.
 
@@ -698,13 +721,7 @@ class PDB:
         line-info bytes as if they were records. Returns b"" when the module
         has no symbols.
         """
-        if not mod.has_symbols or not self.msf.is_valid_stream(mod.sym_stream):
-            return b""
-        raw = self.msf.read_stream(mod.sym_stream)
-        end = min(mod.sym_byte_size, len(raw))
-        if len(raw) >= 4 and struct.unpack_from("<I", raw, 0)[0] == CV_SIGNATURE_C13:
-            return raw[4:end]
-        return raw[:end]
+        return self._module_symbol_bytes_and_offset(mod)[0]
 
     def module_c13_bytes(self, mod) -> bytes:
         """The C13 line-info region of one module's stream.
@@ -869,7 +886,7 @@ class PDB:
         ids = self.id_table()
         out: list[InlineFunction] = []
         for mod in self.dbi.modules:
-            body = self.module_symbol_bytes(mod)
+            body, base_offset = self._module_symbol_bytes_and_offset(mod)
             if not body:
                 continue
             procs: list[tuple[int, codeview.ProcSymbol]] = []
@@ -877,10 +894,10 @@ class PDB:
             for rec in codeview.iter_records(body):
                 try:
                     if rec.kind in codeview.PROC_KINDS:
-                        procs.append((rec.offset + CV_SIGNATURE_SIZE,
+                        procs.append((rec.offset + base_offset,
                                       codeview.parse_proc(rec.kind, rec.payload)))
                     elif rec.kind == codeview.S_INLINESITE:
-                        sites.append((rec.offset + CV_SIGNATURE_SIZE,
+                        sites.append((rec.offset + base_offset,
                                       codeview.parse_inline_site(rec.payload)))
                 except EOFError:
                     continue  # shorter than its kind requires; skip the record
@@ -1046,7 +1063,12 @@ class PDB:
 
         `/names` and `/LinkInfo` are what real linkers put here.
         """
-        return parse_named_stream_map(self.msf.read_stream(STREAM_PDB_INFO))
+        if not self.msf.is_valid_stream(STREAM_PDB_INFO):
+            return {}
+        try:
+            return parse_named_stream_map(self.msf.read_stream(STREAM_PDB_INFO))
+        except MsfError:
+            return {}
 
     def string_table(self) -> StringTable | None:
         """The `/names` global string table, or None when the PDB has none."""
@@ -1115,8 +1137,27 @@ class PDB:
         malformed = 0
         malformed_inline = 0
         line_bytes = 0
+        c13_truncations: list[tuple[str, c13.C13Truncation]] = []
         for mod in self.dbi.modules:
-            line_bytes += len(self.module_c13_bytes(mod))
+            c13_bytes = self.module_c13_bytes(mod)
+            line_bytes += len(c13_bytes)
+            if c13_bytes:
+                # The truncation reports come from re-decoding every
+                # DEBUG_S_LINES payload here and discarding the entries:
+                # 18ms of the 180ms diagnose() costs on the 3 MB sqlite
+                # fixture. Deliberate, for the same reason
+                # `count_malformed_records` runs twice per module below --
+                # `parse_lines` is the only implementation of the block walk,
+                # and a header-only twin kept beside it would drift from it.
+                # `lines()` cannot be reused for this: it is a generator a
+                # caller may never consume, and it resolves file names,
+                # which this loop does not want.
+                mod_c13_report: list[c13.C13Truncation] = []
+                for sub in c13.iter_subsections(c13_bytes, truncation=mod_c13_report):
+                    if sub.kind == c13.DEBUG_S_LINES:
+                        c13.parse_lines(sub.payload, truncation=mod_c13_report)
+                for t in mod_c13_report:
+                    c13_truncations.append((f"module {mod.index} ({mod.module_name})", t))
             body = self.module_symbol_bytes(mod)
             if not body:
                 continue
@@ -1199,6 +1240,7 @@ class PDB:
             pdb_info_error=pdb_info_error,
             module_list_stopped_at=self.dbi.module_list_stopped_at,
             thread_local_records=thread_locals,
+            c13_truncations=c13_truncations,
         )
 
     def _is_code(self, segment: int) -> bool:

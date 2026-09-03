@@ -78,7 +78,16 @@ class LineEntry:
     is_statement: bool
 
 
-def iter_subsections(data: bytes):
+@dataclass
+class C13Truncation:
+    """Where a C13 subsection or line walk stopped early, and why."""
+
+    offset: int
+    reason: str
+
+
+def iter_subsections(data: bytes, *,
+                     truncation: list[C13Truncation] | None = None):
     """Yield each C13 subsection. Stops at the first header that does not fit.
 
     A subsection whose kind carries `DEBUG_S_IGNORE` is stepped over rather
@@ -92,11 +101,23 @@ def iter_subsections(data: bytes):
         kind, length = struct.unpack_from("<II", data, pos)
         pos += 8
         if length > len(data) - pos:
+            if truncation is not None:
+                truncation.append(C13Truncation(
+                    pos - 8,
+                    f"subsection {kind:#x} length {length} runs "
+                    f"{length - (len(data) - pos)} bytes past the end of the "
+                    f"{len(data)}-byte C13 stream",
+                ))
             return
         if not kind & DEBUG_S_IGNORE:
             yield Subsection(kind=kind, payload=data[pos : pos + length])
         pos += length
         pos += -pos % 4
+    if pos < len(data) and truncation is not None:
+        truncation.append(C13Truncation(
+            pos,
+            f"{len(data) - pos} trailing byte(s) are too few for a subsection header",
+        ))
 
 
 def parse_file_checksums(payload: bytes) -> dict[int, int]:
@@ -116,9 +137,15 @@ def parse_file_checksums(payload: bytes) -> dict[int, int]:
     return out
 
 
-def parse_lines(payload: bytes) -> list[LineEntry]:
+def parse_lines(payload: bytes, *,
+                truncation: list[C13Truncation] | None = None) -> list[LineEntry]:
     """Decode one DEBUG_S_LINES subsection."""
     if len(payload) < _LINE_FRAGMENT_HEADER.size:
+        if truncation is not None and len(payload) > 0:
+            truncation.append(C13Truncation(
+                0,
+                f"DEBUG_S_LINES payload is {len(payload)} byte(s), too short for header",
+            ))
         return []
     base_offset, segment, flags, _code_size = _LINE_FRAGMENT_HEADER.unpack_from(payload, 0)
     have_columns = bool(flags & LF_HAVE_COLUMNS)
@@ -132,7 +159,13 @@ def parse_lines(payload: bytes) -> list[LineEntry]:
         if have_columns:
             needed += num_lines * 4
         if needed > len(payload) - entries_at:
-            break
+            if truncation is not None:
+                truncation.append(C13Truncation(
+                    pos,
+                    f"line block at byte {pos:#x} needs {needed} bytes for {num_lines} "
+                    f"lines, exceeding remaining {len(payload) - entries_at} bytes",
+                ))
+            return out
 
         for i in range(num_lines):
             offset, packed = _LINE_ENTRY.unpack_from(payload, entries_at + i * _LINE_ENTRY.size)
@@ -149,4 +182,10 @@ def parse_lines(payload: bytes) -> list[LineEntry]:
         step = block_size if block_size > _LINE_BLOCK_HEADER.size else (
             _LINE_BLOCK_HEADER.size + needed)
         pos += step
+    if pos < len(payload) and truncation is not None:
+        truncation.append(C13Truncation(
+            pos,
+            f"{len(payload) - pos} trailing byte(s) in DEBUG_S_LINES are "
+            f"too few for a block header",
+        ))
     return out
