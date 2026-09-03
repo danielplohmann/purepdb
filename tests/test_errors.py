@@ -328,3 +328,22 @@ def test_dbi_substream_corrupted_sizes_raise_msf_error():
         struct.pack_into("<i", corrupted, offset, len(raw_dbi) + 100)
         with pytest.raises(MsfError, match="runs past end of stream"):
             DbiStream.parse(bytes(corrupted))
+
+
+def test_a_dbi_stream_shorter_than_its_header_claims_raises():
+    """A DBI stream cut short raises, rather than degrading gracefully.
+
+    Written down as a deliberate choice (see _check_substream in dbi.py):
+    once the header's own substream sizes describe bytes the stream does not
+    contain, the graceful paths -- `module_list_stopped_at`,
+    `codeview.Truncation` -- no longer apply, because those cover damage
+    inside substreams whose bounds the header describes correctly.
+    """
+    mods = module_info("main.obj", "main.obj", sym_stream=5, sym_byte_size=4)
+    data = dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
+                      dbg_header=[0xFFFF] * 5 + [6])
+    # The whole stream parses, and its module list is intact...
+    assert [m.module_name for m in DbiStream.parse(data).modules] == ["main.obj"]
+    # ...but a stream cut short is rejected outright, not partially read.
+    with pytest.raises(MsfError, match="runs past end of stream"):
+        DbiStream.parse(data[:-8])

@@ -32,7 +32,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-from .msf import MsfError
+from .msf import PdbError
 
 _PUBLICS_HEADER = struct.Struct(
     "<I"   # SymHash       -- byte size of the hash-table portion
@@ -72,14 +72,14 @@ class PublicsStream:
     @classmethod
     def parse(cls, data: bytes) -> PublicsStream:
         if len(data) < _PUBLICS_HEADER.size:
-            raise MsfError("publics stream too small for its header")
+            raise PdbError("publics stream too small for its header")
         (sym_hash, addr_map_size, num_thunks, size_of_thunk,
          isect, _pad, off_thunk, num_sections) = _PUBLICS_HEADER.unpack_from(data, 0)
 
         start = _PUBLICS_HEADER.size + sym_hash
         end = start + addr_map_size
         if end > len(data):
-            raise MsfError(
+            raise PdbError(
                 f"publics address map runs past end of stream "
                 f"(need {end} bytes, have {len(data)})"
             )

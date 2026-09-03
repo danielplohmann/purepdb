@@ -10,7 +10,7 @@ import struct
 
 import pytest
 
-from purepdb import PDB, MsfError
+from purepdb import PDB, PdbError
 from purepdb.gsi import PublicsStream
 from tests._synth import (
     build_msf,
@@ -143,10 +143,15 @@ def test_folded_addresses_keep_every_name_as_an_alias():
     assert len(fn.names) == 3
 
 
-def test_publics_stream_parse_raises_msf_error_on_truncated_data():
-    with pytest.raises(MsfError):
+def test_publics_stream_parse_raises_pdb_error_on_truncated_data():
+    with pytest.raises(PdbError):
         PublicsStream.parse(b"")
     # Header claims 100 bytes of address map, but buffer only has the 28-byte header.
     hdr = struct.pack("<IIIIHHII", 0, 100, 0, 0, 0, 0, 0, 0)
-    with pytest.raises(MsfError):
+    with pytest.raises(PdbError):
         PublicsStream.parse(hdr)
+    # Plain PdbError, not one of the container errors: the publics stream is
+    # not an MSF container, and the exception should not claim to be one.
+    with pytest.raises(PdbError) as exc_info:
+        PublicsStream.parse(b"")
+    assert type(exc_info.value) is PdbError

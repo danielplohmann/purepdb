@@ -220,6 +220,17 @@ class DbiStream:
 
         off = _HEADER.size
 
+        # Both checks here are deliberate, and the second one is a choice.
+        # A negative size slices backwards, aliasing the header or an earlier
+        # substream -- bytes that were never substream data at all. A size past
+        # the stream end means the header's own arithmetic disagrees with the
+        # container holding it. Both are container-level damage, so both raise:
+        # the graceful degradation further down -- a module list that stops
+        # mid-record (`module_list_stopped_at`), record walks that report a
+        # `codeview.Truncation` -- is for damage *inside* a substream whose
+        # bounds the header describes correctly. Deciding whether damage is
+        # contained is not a judgement made from bytes the header has already
+        # lied about.
         def _check_substream(name: str, size: int) -> None:
             if size < 0:
                 raise MsfError(f"DBI {name} substream size is negative ({size})")

@@ -674,7 +674,7 @@ class PDB:
             return None
         try:
             return PublicsStream.parse(self.msf.read_stream(idx))
-        except (MsfError, struct.error):
+        except (PdbError, struct.error):
             return None
 
     def public_symbols(self) -> list[codeview.PublicSymbol]:
@@ -1142,6 +1142,16 @@ class PDB:
             c13_bytes = self.module_c13_bytes(mod)
             line_bytes += len(c13_bytes)
             if c13_bytes:
+                # The truncation reports come from re-decoding every
+                # DEBUG_S_LINES payload here and discarding the entries:
+                # 18ms of the 180ms diagnose() costs on the 3 MB sqlite
+                # fixture. Deliberate, for the same reason
+                # `count_malformed_records` runs twice per module below --
+                # `parse_lines` is the only implementation of the block walk,
+                # and a header-only twin kept beside it would drift from it.
+                # `lines()` cannot be reused for this: it is a generator a
+                # caller may never consume, and it resolves file names,
+                # which this loop does not want.
                 mod_c13_report: list[c13.C13Truncation] = []
                 for sub in c13.iter_subsections(c13_bytes, truncation=mod_c13_report):
                     if sub.kind == c13.DEBUG_S_LINES:
