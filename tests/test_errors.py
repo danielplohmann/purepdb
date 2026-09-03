@@ -303,3 +303,28 @@ def test_a_module_record_with_an_unterminated_name_stops_the_walk():
     pdb = PDB.from_bytes(build_msf(streams))
     assert [m.module_name for m in pdb.dbi.modules] == ["main.obj"]
     assert pdb.functions() == []
+
+
+def test_dbi_substream_corrupted_sizes_raise_msf_error():
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parent / "data" / "sqlite" / "x86" / "sqlite3.pdb"
+    if not fixture.exists():
+        pytest.skip("fixture absent")
+    pdb = PDB.open(str(fixture))
+    raw_dbi = pdb.msf.read_stream(3)
+    # Substream size slots in DBI header:
+    # 24: ModInfo, 28: SecContrib, 32: SecMap, 36: SrcInfo, 40: TSMap, 48: DbgHdr, 52: EC
+    size_offsets = [24, 28, 32, 36, 40, 48, 52]
+    for offset in size_offsets:
+        # Corrupted negative size:
+        corrupted = bytearray(raw_dbi)
+        struct.pack_into("<i", corrupted, offset, -1)
+        with pytest.raises(MsfError, match="substream size is negative"):
+            DbiStream.parse(bytes(corrupted))
+
+        # Corrupted size exceeding stream length:
+        corrupted = bytearray(raw_dbi)
+        struct.pack_into("<i", corrupted, offset, len(raw_dbi) + 100)
+        with pytest.raises(MsfError, match="runs past end of stream"):
+            DbiStream.parse(bytes(corrupted))

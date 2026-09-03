@@ -217,19 +217,42 @@ class DbiStream:
         )
 
         off = _HEADER.size
+
+        def _check_substream(name: str, size: int) -> None:
+            if size < 0:
+                raise MsfError(f"DBI {name} substream size is negative ({size})")
+            if off + size > len(data):
+                raise MsfError(
+                    f"DBI {name} substream runs past end of stream "
+                    f"(starts at {off}, size {size}, stream length {len(data)})"
+                )
+
+        _check_substream("ModuleInfo", modinfo_size)
         self.modules, self.module_list_stopped_at = _parse_module_list(
             data[off : off + modinfo_size]
         )
         off += modinfo_size
+
+        _check_substream("SectionContribution", seccontrib_size)
         self.section_contributions = _parse_section_contributions(
             data[off : off + seccontrib_size]
         )
         off += seccontrib_size
+
+        _check_substream("SectionMap", secmap_size)
         self.section_map = parse_section_map(data[off : off + secmap_size])
         off += secmap_size
+
+        _check_substream("SourceInfo", srcinfo_size)
         off += srcinfo_size
+
+        _check_substream("TypeServerMap", tsmap_size)
         off += tsmap_size
+
+        _check_substream("EC", ec_size)
         off += ec_size
+
+        _check_substream("OptionalDebugHeader", dbg_hdr_size)
         self.dbg_header = _parse_dbg_header(data[off : off + dbg_hdr_size])
         return self
 
