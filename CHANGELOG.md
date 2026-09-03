@@ -14,7 +14,27 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `Diagnostics.c13_truncations` records where and why a C13 line-info walk
+  stopped early, accompanied by an explanatory warning in `Diagnostics.warnings`.
+  `C13Truncation` is exported in `purepdb.__all__`.
+
+### Fixed
+
+- `PDB.named_streams()` returns `{}` when the PDB Info stream is absent or
+  invalid, matching its documented contract and preventing `MsfError` from
+  escaping `string_table()`, `lines()`, and `diagnose()`.
+- `PublicsStream.parse()` raises `MsfError` rather than `ValueError` on
+  truncated input, ensuring `PdbError` remains the only exception surface a
+  caller must handle.
+- `DbiStream.parse()` validates substream sizes as non-negative and bounded by
+  the stream length, raising `MsfError` on corrupted sizes instead of silently
+  aliasing or dropping substreams.
+- `PDB.inline_sites()` adjusts procedure and inline-site offsets by
+  `CV_SIGNATURE_SIZE` only when a CodeView signature was actually stripped from
+  the module symbol stream, preventing mismatched coordinate spaces when
+  evaluating procedure enclosures.
 
 ## [0.5.0] - 2026-08-28
 

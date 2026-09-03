@@ -115,6 +115,7 @@ class SectionContribution:
     module_index: int  # index into DbiStream.modules
 
     def contains(self, segment: int, offset: int) -> bool:
+        """Whether this contribution covers the given segment:offset."""
         return self.segment == segment and self.offset <= offset < self.offset + self.size
 
 
@@ -134,6 +135,7 @@ class ContributionMap:
         self._keys = [(c.segment, c.offset) for c in self._sorted]
 
     def __len__(self) -> int:
+        """Total number of contributions, including empty ones."""
         return len(self.contributions)
 
     def find(self, segment: int, offset: int) -> SectionContribution | None:
