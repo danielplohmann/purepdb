@@ -29,16 +29,25 @@ resolve *differently* would be breaking, and would say so here.
   truncated input, ensuring `PdbError` remains the only exception surface a
   caller must handle. Plain `PdbError` rather than `MsfError`: the publics
   stream is not an MSF container.
-- `DbiStream.parse()` validates substream sizes as non-negative and bounded by
-  the stream length, raising `MsfError` on corrupted sizes instead of silently
-  aliasing or dropping substreams. This includes a DBI stream shorter than its
-  header claims, which now raises rather than degrading to a partial module
-  list -- the graceful paths cover damage inside substreams, not a header that
-  lies about the bounds themselves.
-- `PDB.inline_sites()` adjusts procedure and inline-site offsets by
-  `CV_SIGNATURE_SIZE` only when a CodeView signature was actually stripped from
-  the module symbol stream, preventing mismatched coordinate spaces when
-  evaluating procedure enclosures.
+- `DbiStream.parse()` checks its substream sizes. A negative one raises
+  `MsfError`: it makes the next substream's offset go backwards, so every
+  later slice would alias bytes that were never substream data. A size past
+  the end of the stream is read as far as the stream goes and recorded in
+  `DbiStream.substream_overrun`, which `diagnose()` reports as
+  `Diagnostics.dbi_overrun` with a warning naming the substream -- a file
+  missing the last eight bytes of its debug header still yields every
+  function, and now says what it is missing. (Raising for the overrun too was
+  tried on this branch and reverted: it turned such a file into one that
+  would not open, with no diagnostic to say why.)
+- C13 trailing bytes are reported as a truncation only when they hold
+  something. Fewer than eight bytes after the last subsection cannot be a
+  header; zero ones are a producer's padding, and the lines before them are
+  all present.
+- `PDB.inline_sites()` compares a site's offset against its procedure's End in
+  the stream's own coordinate space, adding `CV_SIGNATURE_SIZE` only when a
+  signature was actually stripped. Not observable on a well-formed stream --
+  a site precedes the S_END its procedure names by more than four bytes -- but
+  the two offsets were being compared in different spaces.
 
 ## [0.5.0] - 2026-08-28
 

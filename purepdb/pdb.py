@@ -295,6 +295,11 @@ class Diagnostics:
     explanation, in the report rather than in the alarm channel."""
     c13_truncations: list[tuple[str, c13.C13Truncation]] = field(default_factory=list)
     """Where a C13 line-info walk stopped short of consuming its buffer, and why."""
+    dbi_overrun: str | None = None
+    """A DBI substream whose declared size ran past the stream, if any. It was
+    read as far as the stream goes and the substreams after it as empty, so
+    modules, section contributions, the section map or the debug-header slots
+    may be missing."""
 
     @property
     def truncated_streams(self) -> int:
@@ -424,6 +429,14 @@ class Diagnostics:
                 "original-to-final address map in slot 4 is missing: every rva "
                 "is in the pre-optimisation address space and does not match "
                 "the shipped image"
+            )
+        if self.dbi_overrun is not None:
+            out.append(
+                f"the DBI stream is shorter than its header claims "
+                f"({self.dbi_overrun}); that substream was read as far as the "
+                f"stream goes and the ones after it as empty, so modules, "
+                f"section contributions, the section map or the debug-header "
+                f"slots may be missing"
             )
         if self.module_list_stopped_at is not None:
             out.append(
@@ -1239,6 +1252,7 @@ class PDB:
             has_string_table=self.string_table() is not None,
             pdb_info_error=pdb_info_error,
             module_list_stopped_at=self.dbi.module_list_stopped_at,
+            dbi_overrun=self.dbi.substream_overrun,
             thread_local_records=thread_locals,
             c13_truncations=c13_truncations,
         )

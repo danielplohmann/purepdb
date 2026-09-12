@@ -164,6 +164,11 @@ class DbiStream:
 
     Non-None means `modules` is short: the modules past that point were never
     read, and every symbol in their streams is absent."""
+    substream_overrun: str | None = None
+    """The first substream whose declared size ran past the end of the DBI
+    stream, or None. That substream was read as far as the stream goes and
+    every one after it as empty, so modules, contributions, the section map
+    or the debug-header slots may be missing -- which `diagnose()` says."""
 
     def dbg_stream(self, slot: int) -> int:
         """The stream index in an Optional Debug Header slot, or 0xFFFF."""
@@ -220,52 +225,49 @@ class DbiStream:
 
         off = _HEADER.size
 
-        # Both checks here are deliberate, and the second one is a choice.
-        # A negative size slices backwards, aliasing the header or an earlier
-        # substream -- bytes that were never substream data at all. A size past
-        # the stream end means the header's own arithmetic disagrees with the
-        # container holding it. Both are container-level damage, so both raise:
-        # the graceful degradation further down -- a module list that stops
-        # mid-record (`module_list_stopped_at`), record walks that report a
-        # `codeview.Truncation` -- is for damage *inside* a substream whose
-        # bounds the header describes correctly. Deciding whether damage is
-        # contained is not a judgement made from bytes the header has already
-        # lied about.
-        def _check_substream(name: str, size: int) -> None:
+        # The two ways a substream size can be wrong are not the same kind of
+        # wrong. A negative size makes the *next* substream's offset go
+        # backwards, so every later slice aliases the header or an earlier
+        # substream -- bytes that were never substream data -- and anything
+        # read from them is fiction. That raises. A size past the end of the
+        # stream is a stream cut short: what is there is real, the parsers
+        # below already stop at the end of what they are handed, and a file
+        # missing the last eight bytes of its debug header used to yield every
+        # function. So it is read as far as it goes and recorded, once, where
+        # `diagnose()` can turn it into a sentence -- an empty result with an
+        # explanation rather than a refusal, which is the contract.
+        def _check_substream(name: str, size: int) -> int:
             if size < 0:
                 raise MsfError(f"DBI {name} substream size is negative ({size})")
             if off + size > len(data):
-                raise MsfError(
-                    f"DBI {name} substream runs past end of stream "
-                    f"(starts at {off}, size {size}, stream length {len(data)})"
-                )
+                if self.substream_overrun is None:
+                    self.substream_overrun = (
+                        f"the {name} substream starts at byte {off} and claims "
+                        f"{size} bytes of a {len(data)}-byte stream")
+                return max(0, len(data) - off)
+            return size
 
-        _check_substream("ModuleInfo", modinfo_size)
+        modinfo_size = _check_substream("ModuleInfo", modinfo_size)
         self.modules, self.module_list_stopped_at = _parse_module_list(
             data[off : off + modinfo_size]
         )
         off += modinfo_size
 
-        _check_substream("SectionContribution", seccontrib_size)
+        seccontrib_size = _check_substream("SectionContribution", seccontrib_size)
         self.section_contributions = _parse_section_contributions(
             data[off : off + seccontrib_size]
         )
         off += seccontrib_size
 
-        _check_substream("SectionMap", secmap_size)
+        secmap_size = _check_substream("SectionMap", secmap_size)
         self.section_map = parse_section_map(data[off : off + secmap_size])
         off += secmap_size
 
-        _check_substream("SourceInfo", srcinfo_size)
-        off += srcinfo_size
+        off += _check_substream("SourceInfo", srcinfo_size)
+        off += _check_substream("TypeServerMap", tsmap_size)
+        off += _check_substream("EC", ec_size)
 
-        _check_substream("TypeServerMap", tsmap_size)
-        off += tsmap_size
-
-        _check_substream("EC", ec_size)
-        off += ec_size
-
-        _check_substream("OptionalDebugHeader", dbg_hdr_size)
+        dbg_hdr_size = _check_substream("OptionalDebugHeader", dbg_hdr_size)
         self.dbg_header = _parse_dbg_header(data[off : off + dbg_hdr_size])
         return self
 

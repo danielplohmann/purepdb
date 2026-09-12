@@ -16,6 +16,7 @@ from purepdb.pdb import PDB_INFO_VC70
 from tests._synth import (
     build_msf,
     dbi_stream,
+    gproc32,
     module_info,
     module_sym_stream,
     publics_hash_stream,
@@ -323,27 +324,46 @@ def test_dbi_substream_corrupted_sizes_raise_msf_error():
         with pytest.raises(MsfError, match="substream size is negative"):
             DbiStream.parse(bytes(corrupted))
 
-        # Corrupted size exceeding stream length:
+        # A size past the end of the stream is read as far as the stream goes
+        # and recorded, not raised: what is there is real.
         corrupted = bytearray(raw_dbi)
         struct.pack_into("<i", corrupted, offset, len(raw_dbi) + 100)
-        with pytest.raises(MsfError, match="runs past end of stream"):
-            DbiStream.parse(bytes(corrupted))
+        dbi = DbiStream.parse(bytes(corrupted))
+        assert dbi.substream_overrun is not None
+        assert f"claims {len(raw_dbi) + 100} bytes" in dbi.substream_overrun
 
 
-def test_a_dbi_stream_shorter_than_its_header_claims_raises():
-    """A DBI stream cut short raises, rather than degrading gracefully.
-
-    Written down as a deliberate choice (see _check_substream in dbi.py):
-    once the header's own substream sizes describe bytes the stream does not
-    contain, the graceful paths -- `module_list_stopped_at`,
-    `codeview.Truncation` -- no longer apply, because those cover damage
-    inside substreams whose bounds the header describes correctly.
+def test_a_dbi_stream_shorter_than_its_header_claims_is_read_and_explained():
+    """A DBI stream cut short is read as far as it goes, and diagnose() says
+    so. Raising here was tried and reverted: it turned a file missing the
+    last eight bytes of its debug header -- every function recoverable --
+    into one that would not open, with no diagnostic to say why. A negative
+    size is different (it aliases earlier bytes) and still raises.
     """
     mods = module_info("main.obj", "main.obj", sym_stream=5, sym_byte_size=4)
     data = dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
                       dbg_header=[0xFFFF] * 5 + [6])
-    # The whole stream parses, and its module list is intact...
-    assert [m.module_name for m in DbiStream.parse(data).modules] == ["main.obj"]
-    # ...but a stream cut short is rejected outright, not partially read.
-    with pytest.raises(MsfError, match="runs past end of stream"):
-        DbiStream.parse(data[:-8])
+    whole = DbiStream.parse(data)
+    assert [m.module_name for m in whole.modules] == ["main.obj"]
+    assert whole.substream_overrun is None
+
+    cut = DbiStream.parse(data[:-8])
+    assert [m.module_name for m in cut.modules] == ["main.obj"]
+    assert cut.substream_overrun is not None
+    assert "OptionalDebugHeader" in cut.substream_overrun
+
+    syms = module_sym_stream(gproc32("main", 1, 0x10))
+    streams = [
+        b"",
+        struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
+        b"",
+        data[:-8],
+        publics_hash_stream([]),
+        syms,
+        section_header(".text", 0x1000),
+        b"",
+    ]
+    pdb = PDB.from_bytes(build_msf(streams))
+    d = pdb.diagnose()
+    assert d.dbi_overrun is not None
+    assert any("shorter than its header claims" in w for w in d.warnings)

@@ -445,6 +445,29 @@ def test_modules_accounts_for_a_contribution_with_no_module(tmp_path, capsys):
     assert err[:2] == ["", "1 modules"]
 
 
+def test_diagnose_reports_a_c13_section_that_stops_early(tmp_path, capsys):
+    from purepdb import c13
+    from tests._synth import names_stream, pdb_info_stream
+
+    symbols = gproc32("main", 1, 0x10)
+    region = struct.pack("<II", c13.DEBUG_S_LINES, 500) + b"\x00" * 8
+    mods = module_info("main.obj", "main.obj", sym_stream=5,
+                       sym_byte_size=4 + len(symbols), c13_byte_size=len(region))
+    streams = [
+        b"", pdb_info_stream({"/names": 7}), b"",
+        dbi_stream(public_stream=4, symrecord_stream=8, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [6]),
+        publics_hash_stream([]), module_sym_stream(symbols) + region,
+        section_header(".text", 0x1000, 0x10000), names_stream([""])[0], b"",
+    ]
+    path = tmp_path / "c13.pdb"
+    path.write_bytes(build_msf(streams))
+    out, _err = _run(capsys, "diagnose", str(path))
+    text = "\n".join(out)
+    assert "1 C13 line-info section(s) stopped early" in text
+    assert "runs 492 bytes past the end" in text
+
+
 def test_info(sample, capsys):
     out, err = _run(capsys, "info", sample)
     assert out[0] == "version   : 20000404"

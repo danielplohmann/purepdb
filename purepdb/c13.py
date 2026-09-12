@@ -113,7 +113,10 @@ def iter_subsections(data: bytes, *,
             yield Subsection(kind=kind, payload=data[pos : pos + length])
         pos += length
         pos += -pos % 4
-    if pos < len(data) and truncation is not None:
+    # Fewer than eight bytes after the last subsection cannot be a header.
+    # Zero bytes there are padding -- a producer rounding the region up --
+    # and only bytes with something in them are evidence of a cut.
+    if pos < len(data) and truncation is not None and any(data[pos:]):
         truncation.append(C13Truncation(
             pos,
             f"{len(data) - pos} trailing byte(s) are too few for a subsection header",
@@ -182,7 +185,7 @@ def parse_lines(payload: bytes, *,
         step = block_size if block_size > _LINE_BLOCK_HEADER.size else (
             _LINE_BLOCK_HEADER.size + needed)
         pos += step
-    if pos < len(payload) and truncation is not None:
+    if pos < len(payload) and truncation is not None and any(payload[pos:]):
         truncation.append(C13Truncation(
             pos,
             f"{len(payload) - pos} trailing byte(s) in DEBUG_S_LINES are "
