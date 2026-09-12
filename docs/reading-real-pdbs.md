@@ -173,6 +173,18 @@ It works — clearing slot 5 in a byte copy of each fixture leaves every functio
 at the address it had before. But it is a reconstruction, not a reading, and a
 consumer deserves to know which it got. `diagnose()` reports it.
 
+Measured more widely in the 2026-09 audit, against 33 real PDBs that carry a
+section table to compare with: the rebuilt addresses are exact on every
+user-mode image `link.exe` or an LLVM linker produced — python 2.7 through 3.14
+on x64, x86 and arm64, node, the Win10 and Win11 system DLLs, everything
+self-built — and exact against the *pre-BBT* table in slot 10 on the five
+BBT-processed Win7 and XP files, which is the layout the map describes. It is
+wrong on kernel-mode images linked with a small `/ALIGN`: `hal.dll` puts its
+first section at 0x380 and `ntkrnlpa.exe` at 0x600, and the PDB does not say so.
+One more limit is the map's flags: `ntkrnlmp.exe`'s 28th section is code in the
+real table and carries no `SEG_EXECUTE` in the map, so without slot 5 its
+publics would not count as code publics. The addresses there are still right.
+
 ## Empty is the normal failure mode
 
 This is the one that shapes everything else. Almost every way a PDB can defeat
