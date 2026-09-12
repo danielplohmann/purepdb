@@ -387,24 +387,28 @@ BA_OP_CHANGE_COLUMN_END = 13
 _BA_TWO_OPERANDS = BA_OP_CHANGE_CODE_LENGTH_AND_CODE_OFFSET
 
 
-def _uncompress(r: Reader) -> int | None:
-    """Read one compressed unsigned integer.
+def _uncompress_at(data: bytes, pos: int) -> tuple[int | None, int]:
+    """Read one compressed unsigned integer at `pos`; the value and the
+    position after it.
 
     The top bits of the first byte give the width: 1, 2 or 4 bytes. None for
     the 4th encoding, which is not defined -- and, since operand widths are
     what keep the stream in step, means the rest cannot be read either.
+    Raises IndexError past the end of `data`, which the caller treats the way
+    it treats a Reader's EOFError: the walk ends.
     """
-    b0 = r.u8()
+    b0 = data[pos]
     if b0 & 0x80 == 0:
-        return b0
+        return b0, pos + 1
     if b0 & 0xC0 == 0x80:
-        return ((b0 & 0x3F) << 8) | r.u8()
+        return ((b0 & 0x3F) << 8) | data[pos + 1], pos + 2
     if b0 & 0xE0 == 0xC0:
-        return ((b0 & 0x1F) << 24) | (r.u8() << 16) | (r.u8() << 8) | r.u8()
-    return None
+        return (((b0 & 0x1F) << 24) | (data[pos + 1] << 16)
+                | (data[pos + 2] << 8) | data[pos + 3]), pos + 4
+    return None, pos + 1
 
 
-@dataclass
+@dataclass(slots=True)
 class InlineSite:
     """S_INLINESITE: a function body the compiler pasted into another one.
 
@@ -472,6 +476,10 @@ def extract_sepcodes(data: bytes) -> list[SepCode]:
                     (r for r in iter_records(data) if r.kind == S_SEPCODE))
 
 
+_INLINE_FIXED = struct.Struct("<III")  # Parent, End, Inlinee
+assert _INLINE_FIXED.size == 12
+
+
 def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
     """Decode the record and walk its annotations for the code it covers.
 
@@ -482,27 +490,31 @@ def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
     `S_INLINESITE2` is the same record with an invocation count between the
     inlinee and the annotations; the count is stepped over, since how often a
     body was inlined is not where it is.
+
+    The annotations are walked with an integer cursor over the payload rather
+    than a Reader, and the one-byte operand -- nearly all of them -- is read
+    inline: there are 1.6 million of these records in a 355 MB node.pdb,
+    with nine operand bytes each on average, and a method call per byte was
+    most of the cost of both `inline_sites()` and `diagnose()` on it.
     """
-    r = Reader(payload)
-    r.u32()  # Parent
-    r.u32()  # End
-    inlinee = r.u32()
-    if kind == S_INLINESITE2:
-        r.u32()  # invocations
+    fixed = _INLINE_FIXED.size + (4 if kind == S_INLINESITE2 else 0)
+    if len(payload) < fixed:
+        raise EOFError(f"read past end of buffer (need {fixed}, have {len(payload)})")
+    _parent, _end, inlinee = _INLINE_FIXED.unpack_from(payload, 0)
 
     site = InlineSite(inlinee=inlinee)
+    ranges = site.ranges
+    separated = site.separated_ranges
     code_offset = 0
     chunk = 0  # 0 is the procedure's own body; n is its n'th separated chunk
-
-    def place(offset: int, length: int) -> None:
-        if chunk == 0:
-            site.ranges.append((offset, length))
-        else:
-            site.separated_ranges.append((chunk, offset, length))
-
+    pos = fixed
+    end = len(payload)
     try:
-        while not r.eof():
-            opcode = _uncompress(r)
+        while pos < end:
+            opcode = payload[pos]
+            pos += 1
+            if opcode & 0x80:
+                opcode, pos = _uncompress_at(payload, pos - 1)
             if opcode is None or opcode == BA_OP_INVALID:
                 break
             if opcode > BA_OP_CHANGE_COLUMN_END:
@@ -512,9 +524,12 @@ def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
                 # would resynchronise on whatever happened to follow and
                 # fabricate ranges from it.
                 break
-            first = _uncompress(r)
-            if first is None:
-                break
+            first = payload[pos]
+            pos += 1
+            if first & 0x80:
+                first, pos = _uncompress_at(payload, pos - 1)
+                if first is None:
+                    break
             # The cursor is a running offset from the start of the chunk the
             # ranges are in. The two opcodes that close a range treat it
             # differently, and the difference is not a matter of taste: a
@@ -532,18 +547,24 @@ def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
             if opcode == _BA_TWO_OPERANDS:
                 # The only opcode taking two operands, handled here so the
                 # second one is read and used in the same place.
-                second = _uncompress(r)
+                second, pos = _uncompress_at(payload, pos)
                 if second is None:
                     break
                 code_offset += second
-                place(code_offset, first)
+                if chunk == 0:
+                    ranges.append((code_offset, first))
+                else:
+                    separated.append((chunk, code_offset, first))
             elif opcode in (BA_OP_CODE_OFFSET, BA_OP_CHANGE_CODE_OFFSET):
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_AND_LINE_OFFSET:
                 # One operand packs both: the code delta in the low 4 bits.
                 code_offset += first & 0xF
             elif opcode == BA_OP_CHANGE_CODE_LENGTH:
-                place(code_offset, first)
+                if chunk == 0:
+                    ranges.append((code_offset, first))
+                else:
+                    separated.append((chunk, code_offset, first))
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_BASE:
                 # "nth separated code chunk (main code chunk == 0)", per
@@ -555,7 +576,9 @@ def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
                 # of those used to be dropped as describing no code.
                 chunk = first
                 code_offset = 0
-    except EOFError:
+    except IndexError:
+        # An operand cut off by the end of the payload, which is what a
+        # Reader reported as EOFError: the ranges already found stand.
         pass
     return site
 
