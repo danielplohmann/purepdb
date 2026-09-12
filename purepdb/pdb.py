@@ -297,6 +297,22 @@ class Diagnostics:
     -- 14.00 is VS2015, 14.29 is VS2019 16.11, 14.4x is VS2022 -- while every
     LLVM linker writes 14.11 whatever its release, so the number dates a
     Microsoft-linked file and only identifies the other kind."""
+    unnamed_inline_sites: int = 0
+    """Inline sites `inline_sites()` places but cannot name: their inlinee id
+    is one the IPI stream has no record for, or there is no IPI stream at
+    all (`has_id_table` tells the two apart). The entry is reported with an
+    empty `name`, which is the one field a caller wanted from it.
+
+    The ids without a record have a shape: VS2015's compiler writes a
+    function id as `0x80000000 | n` with a small `n` -- cvinfo.h's
+    DecoratedItemId, "in compiler implementation" -- and its linker left
+    them as they were, so 5802 of the 6554 sites in a python 3.5
+    `_hashlib.pdb` name an id no stream holds. llvm-pdbutil prints the same
+    id with no name."""
+    has_id_table: bool = True
+    """Whether the IPI stream (stream 4) was found and readable. Without it
+    no inline site has a name, since the id it carries is an index into
+    that stream and nowhere else."""
     thread_local_records: int = 0
     """S_GTHREAD32/S_LTHREAD32 records across the module streams and the
     symbol-record stream.
@@ -510,6 +526,21 @@ class Diagnostics:
                 f"in a separated code chunk the module has no S_SEPCODE "
                 f"record for, or no open procedure encloses them, so "
                 f"inline_sites() leaves them out"
+            )
+        if self.inline_sites and not self.has_id_table:
+            out.append(
+                f"{self.inline_sites} inline site(s) are present but the IPI "
+                f"stream (stream 4) that holds their names is not, so every "
+                f"entry of inline_sites() has an empty name"
+            )
+        elif self.unnamed_inline_sites:
+            out.append(
+                f"{self.unnamed_inline_sites} of the {self.inline_sites} inline "
+                f"site(s) name an inlinee id the IPI stream has no record for "
+                f"-- the 0x8000_0000-flagged compiler-internal ids VS2015 "
+                f"wrote and its linker did not remap -- so those entries of "
+                f"inline_sites() have an empty name; llvm-pdbutil cannot name "
+                f"them either"
             )
         if self.line_bytes and not self.has_string_table:
             out.append(
@@ -927,15 +958,18 @@ class PDB:
         """
         return self._inline_listing()[0]
 
-    def _inline_listing(self) -> tuple[list[InlineFunction], int]:
-        """`inline_sites()` and the number of records it placed.
+    def _inline_listing(self) -> tuple[list[InlineFunction], int, int]:
+        """`inline_sites()`, the number of records it placed, and the number
+        of those whose inlinee the IPI stream has no name for.
 
-        The two differ when a site's separated chunk sits in another section
-        and it is listed once per section; `diagnose()` counts records.
+        Entries and records differ when a site's separated chunk sits in
+        another section and it is listed once per section; `diagnose()`
+        counts records. The unnamed count is per record too.
         """
         ids = self.id_table()
         out: list[InlineFunction] = []
         placed = 0
+        unnamed = 0
         for mod in self.dbi.modules:
             body = self.module_symbol_bytes(mod)
             if not body:
@@ -989,9 +1023,12 @@ class PDB:
                 if not by_segment:
                     continue
                 placed += 1
+                name = (ids.get(site.inlinee) if ids else None) or ""
+                if not name:
+                    unnamed += 1
                 for segment, ranges in by_segment.items():
                     out.append(InlineFunction(
-                        name=(ids.get(site.inlinee) if ids else None) or "",
+                        name=name,
                         inlinee=site.inlinee,
                         segment=segment,
                         offset=ranges[0][0],
@@ -1002,7 +1039,7 @@ class PDB:
                         parent_code_size=proc.code_size,
                         record_kind=kind,
                     ))
-        return out, placed
+        return out, placed, unnamed
 
     def data_symbols(self) -> list[codeview.DataSymbol]:
         """Global and static data symbols (S_GDATA32/S_LDATA32), each once.
@@ -1257,6 +1294,7 @@ class PDB:
                                  for k in codeview.THREAD_KINDS)
 
         inline_records = sum(kinds.get(k, 0) for k in codeview.INLINE_SITE_KINDS)
+        _listing, placed_sites, unnamed_sites = self._inline_listing()
         return Diagnostics(
             modules=len(self.dbi.modules),
             modules_with_symbols=with_symbols,
@@ -1281,7 +1319,9 @@ class PDB:
             # under two different explanations.
             unplaced_inline_sites=(inline_records
                                    - malformed_inline
-                                   - self._inline_listing()[1]),
+                                   - placed_sites),
+            unnamed_inline_sites=unnamed_sites,
+            has_id_table=self.id_table() is not None,
             proc_refs=proc_refs,
             proc_ref_targets=proc_ref_targets,
             unresolvable_proc_refs=unresolvable_refs,

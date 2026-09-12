@@ -520,3 +520,31 @@ def test_chunks_are_numbered_per_procedure():
                       parent_segment=1, parent_offset=0x40))
     pdb = _pdb(module_records=_proc_with_sites_and_chunks(sites, mine + other))
     assert [s.ranges for s in pdb.inline_sites()] == [[(0x3000, 4)]]
+
+
+# --- names the IPI does not hold ----------------------------------------------
+
+def test_an_inlinee_id_without_a_record_is_counted_and_warned_about():
+    """VS2015 wrote compiler-internal ids (0x80000000 | n) that its linker
+    never remapped; the site is placed, its name is empty, and diagnose()
+    has to say so rather than leave a nameless entry unexplained."""
+    sites = (inline_site(inlinee=0x1000, annotations=bytes([0x0B, 0x04, 0x04, 0x03]))
+             + inline_site(inlinee=0x80000002, annotations=bytes([0x03, 0x20, 0x04, 0x08])))
+    pdb = _pdb(module_records=_proc_with_sites(sites),
+               ipi=ipi_stream([("func", "helper")]))
+    assert [s.name for s in pdb.inline_sites()] == ["helper", ""]
+    d = pdb.diagnose()
+    assert (d.inline_sites, d.unnamed_inline_sites, d.has_id_table) == (2, 1, True)
+    assert any("1 of the 2 inline site(s) name an inlinee id" in w for w in d.warnings)
+
+
+def test_a_missing_ipi_stream_is_warned_about():
+    sites = inline_site(inlinee=0x1000, annotations=bytes([0x0B, 0x04, 0x04, 0x03]))
+    pdb = _pdb(module_records=_proc_with_sites(sites))
+    assert [s.name for s in pdb.inline_sites()] == [""]
+    d = pdb.diagnose()
+    assert (d.inline_sites, d.unnamed_inline_sites, d.has_id_table) == (1, 1, False)
+    assert any("IPI stream (stream 4) that holds their names is not" in w
+               for w in d.warnings)
+    assert not any("name an inlinee id" in w for w in d.warnings), (
+        "one explanation, not two, for the same empty names")

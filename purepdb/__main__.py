@@ -140,7 +140,8 @@ def _diagnose(pdb: PDB) -> None:
             named.append(f"{d.unresolvable_proc_refs} unreadable")
         print(f"  index also names : {', '.join(named)}")
     print(f"public records     : {d.public_records}")
-    print(f"inline sites       : {d.inline_sites}")
+    print(f"inline sites       : {d.inline_sites}"
+          f"{f' ({d.unnamed_inline_sites} unnamed)' if d.unnamed_inline_sites else ''}")
     print(f"labels             : {d.labels}")
     if d.thread_local_records:
         print(f"thread-local recs  : {d.thread_local_records} "

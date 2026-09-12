@@ -62,6 +62,16 @@ resolve *differently* would be breaking, and would say so here.
 - A pull request that changes `purepdb/` or `pyproject.toml` has to add a
   `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
 
+- `diagnose()` says when inline sites have no name to give. An inlined body is
+  named by an item id into the IPI stream; VS2015's compiler wrote a function
+  id as `0x80000000 | n` with a small `n` (cvinfo.h's `DecoratedItemId`, "in
+  compiler implementation") and its linker left them so, which is 5802 of the
+  6554 sites in a python 3.5 `_hashlib.pdb` naming an id no stream holds.
+  `inline_sites()` reported those with an empty `name` and nothing said why;
+  `llvm-pdbutil` cannot name them either. `Diagnostics.unnamed_inline_sites`
+  counts them, `Diagnostics.has_id_table` says whether there was an IPI stream
+  to look in at all, one warning covers each case, and the `diagnose`
+  subcommand shows the count beside the sites.
 - `tools/fuzz.py --seed-dir DIR` mutates the PDBs under a directory of the
   caller's own instead of the fixtures. A private corpus of vendor symbol files
   reaches shapes the fixtures do not -- stripped module lists, OMAP tables,
