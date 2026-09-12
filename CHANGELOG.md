@@ -62,6 +62,12 @@ resolve *differently* would be breaking, and would say so here.
 - A pull request that changes `purepdb/` or `pyproject.toml` has to add a
   `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
 
+- `tools/fuzz.py --seed-dir DIR` mutates the PDBs under a directory of the
+  caller's own instead of the fixtures. A private corpus of vendor symbol files
+  reaches shapes the fixtures do not -- stripped module lists, OMAP tables,
+  1024-byte blocks, publics sorted with a signed offset -- and nothing is
+  written there.
+
 ### Fixed
 
 - Inline-site ranges after a `ChangeCodeLengthAndCodeOffset` annotation were
