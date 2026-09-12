@@ -412,3 +412,111 @@ def test_a_healthy_file_reports_no_unplaced_sites():
     d = pdb.diagnose()
     assert (d.inline_sites, d.unplaced_inline_sites) == (1, 0)
     assert d.warnings == [w for w in d.warnings if "inline site" not in w]
+
+
+# --- the fused opcode, and separated code ------------------------------------
+
+def test_the_fused_length_does_not_move_the_cursor():
+    """`ChangeCodeLengthAndCodeOffset` closes a range without advancing past
+    it: the next delta is measured from where that range began. A standalone
+    `ChangeCodeLength` is the opposite ("default next start", per cvinfo.h).
+
+    Measured, not chosen: treating the fused length like the standalone one
+    put 5582 of the 79187 ranges in a python 3.12 PDB past the end of the
+    procedure they are in, and measured from the range's start none does.
+    """
+    annotations = bytes([0x0C, 0x08, 0x10,   # length 8 at +0x10   -> 0x10..0x18
+                         0x0C, 0x04, 0x02])  # length 4 at +2 from 0x10, not 0x18
+    assert _ranges(annotations) == [(0x10, 8), (0x12, 4)]
+    # And the standalone form still steps past the range it closed.
+    annotations = bytes([0x0C, 0x08, 0x10,   # 0x10..0x18
+                         0x04, 0x03,         # 0x10..0x13 ...
+                         0x0B, 0x01,         # ... then +1 from 0x13
+                         0x04, 0x02])        # 0x14..0x16
+    assert _ranges(annotations) == [(0x10, 8), (0x10, 3), (0x14, 2)]
+
+
+def test_a_rebase_names_a_separated_chunk():
+    """`ChangeCodeOffsetBase n` moves the ranges that follow into the
+    procedure's n'th separated code chunk, measured from its start."""
+    site = codeview.parse_inline_site(
+        struct.pack("<III", 0, 0, 0x1000)
+        + bytes([0x03, 0x04, 0x04, 0x02,       # (4, 2) in the body
+                 0x02, 0x01,                   # chunk 1
+                 0x0B, 0x60, 0x0C, 0x09, 0x0A,  # +0 then length 9 at +10
+                 0x0C, 0x05, 0x0A]))           # length 5 at +10 from there
+    assert site.ranges == [(4, 2)]
+    assert site.separated_ranges == [(1, 10, 9), (1, 20, 5)]
+    assert site.code_size == 16
+
+
+def _proc_with_sites_and_chunks(sites: bytes, chunks: bytes, offset=0x40):
+    """A procedure holding `sites`, followed by its S_SEPCODE `chunks` the
+    way MSVC writes them: after the procedure's own S_END."""
+    return _proc_with_sites(sites, offset=offset) + chunks
+
+
+def test_separated_ranges_are_placed_through_the_chunk_record():
+    from tests._synth import sepcode
+
+    sites = inline_site(inlinee=0x1000, annotations=bytes([
+        0x0B, 0x14, 0x04, 0x02,   # (0x44, 2) in the body
+        0x02, 0x01,               # then in chunk 1
+        0x0C, 0x09, 0x0A]))       # 9 bytes at chunk + 10
+    chunks = sepcode(segment=1, offset=0x2000, length=0x22,
+                     parent_segment=1, parent_offset=0x40)
+    pdb = _pdb(module_records=_proc_with_sites_and_chunks(sites, chunks),
+               ipi=ipi_stream([("func", "cold_helper")]))
+    found = pdb.inline_sites()
+    assert [(s.name, s.segment, s.ranges) for s in found] == [
+        ("cold_helper", 1, [(0x44, 2), (0x200A, 9)])]
+    assert found[0].code_size == 11
+    d = pdb.diagnose()
+    assert (d.inline_sites, d.unplaced_inline_sites) == (1, 0)
+
+
+def test_a_chunk_in_another_section_is_a_second_entry():
+    """One entry has one segment, so a site split across two is listed once
+    per section -- and counted once as a record."""
+    from tests._synth import sepcode
+
+    sites = inline_site(inlinee=0x1000, annotations=bytes([
+        0x0B, 0x14, 0x04, 0x02, 0x02, 0x01, 0x0C, 0x09, 0x0A]))
+    chunks = sepcode(segment=2, offset=0x100, length=0x22,
+                     parent_segment=1, parent_offset=0x40)
+    pdb = _pdb(module_records=_proc_with_sites_and_chunks(sites, chunks))
+    found = pdb.inline_sites()
+    assert [(s.segment, s.offset, s.ranges) for s in found] == [
+        (1, 0x44, [(0x44, 2)]), (2, 0x10A, [(0x10A, 9)])]
+    assert found[0].parent == found[1].parent == "outer"
+    d = pdb.diagnose()
+    assert (d.inline_sites, d.unplaced_inline_sites) == (1, 0)
+
+
+def test_a_chunk_the_module_does_not_carry_is_unplaced():
+    """A site whose only code is in a chunk with no S_SEPCODE record has no
+    address to report, and diagnose() says so."""
+    sites = inline_site(inlinee=0x1000, annotations=bytes([
+        0x02, 0x01, 0x0C, 0x09, 0x0A]))
+    pdb = _pdb(module_records=_proc_with_sites(sites))
+    assert pdb.inline_sites() == []
+    d = pdb.diagnose()
+    assert (d.inline_sites, d.unplaced_inline_sites) == (1, 1)
+    assert any("S_SEPCODE" in w for w in d.warnings)
+
+
+def test_chunks_are_numbered_per_procedure():
+    """The n'th chunk is the n'th S_SEPCODE naming *this* procedure as its
+    parent, not the n'th in the module."""
+    from tests._synth import sepcode
+
+    sites = inline_site(inlinee=0x1000, annotations=bytes([
+        0x02, 0x02, 0x0C, 0x04, 0x00]))  # chunk 2, 4 bytes at its start
+    other = sepcode(segment=1, offset=0x900, length=0x10,
+                    parent_segment=1, parent_offset=0x999)  # someone else's
+    mine = (sepcode(segment=1, offset=0x2000, length=0x22,
+                    parent_segment=1, parent_offset=0x40)
+            + sepcode(segment=1, offset=0x3000, length=0x08,
+                      parent_segment=1, parent_offset=0x40))
+    pdb = _pdb(module_records=_proc_with_sites_and_chunks(sites, mine + other))
+    assert [s.ranges for s in pdb.inline_sites()] == [[(0x3000, 4)]]

@@ -42,6 +42,8 @@ resolve *differently* would be breaking, and would say so here.
   invocation count between the inlinee and the annotations; reading the
   annotations from where the older record keeps them would have decoded the
   count as opcodes. Counted with the other kind in `Diagnostics.inline_sites`.
+  This is the form MSVC writes: a python 3.12 `python312.pdb` has 48608 of
+  its 48642 sites in it, and reported 34 before.
 - `S_LPROC32_DPC` and `S_LPROC32_DPC_ID` are procedures. `cvinfo.h` lists all
   six kinds on the one `PROCSYM32` layout, so a body compiled for a DPC target
   has an entry point like any other and now reaches `functions()`.
@@ -62,6 +64,31 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Fixed
 
+- Inline-site ranges after a `ChangeCodeLengthAndCodeOffset` annotation were
+  placed too far along by the length of every fused range before them. The
+  length fused into that opcode does not move the cursor; the next delta is
+  measured from where the range began, which is how `llvm-pdbutil` has always
+  read it and how cvinfo.h distinguishes it from the standalone
+  `ChangeCodeLength` ("default next start"). purepdb read both the same way,
+  and 0.5.0 rebuilt the cross-check's ranges on that rule to make the two
+  agree. No fixture could tell the readings apart; the python 3.12 PDBs can:
+  5582 of python312.pdb's 79187 ranges end past their procedure or cold chunk
+  under the old rule, and none under this one. **This moves addresses**: on a
+  file whose sites use the fused opcode -- every rust-lld and clang output --
+  the second and later ranges of a site now start earlier than 0.5.0 reported.
+  The first range, and every site with one range, are unchanged.
+- Inline sites in the cold half of a split function are placed. Their
+  annotations open with `ChangeCodeOffsetBase n`, which cvinfo.h defines as
+  "nth separated code chunk (main code chunk == 0)": the ranges that follow
+  are in the procedure's n'th `S_SEPCODE` chunk, measured from its start.
+  purepdb stopped at the opcode as unverified and reported the site as
+  describing no code -- 21 of the 103 in a python 3.12 `_bz2.pdb`, every one
+  a body inlined into code the profile-guided optimiser moved. `S_SEPCODE` is
+  now decoded (`codeview.SepCode`), a site's separated ranges join its others
+  when the chunk is in the same section, and a chunk in another section is
+  reported as a second `InlineFunction` for the same site, since one entry
+  has one `segment`. `InlineSite.separated_ranges` carries the raw triples,
+  and `InlineFunction.record_kind` says which record described a site.
 - A stream directory whose block lists together describe more bytes than the
   file holds is rejected. Each list is bounded by the directory, so every
   per-stream check passed; but every block belongs to one stream, so the sizes

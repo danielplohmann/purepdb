@@ -113,7 +113,22 @@ Rust and modern C++ this is where most of the code goes, and a tool that reports
 only entry points is describing a small fraction of what ran.
 
 `S_INLINESITE` gives the ranges a body occupies inside its caller, and the name
-comes from the IPI stream by item id.
+comes from the IPI stream by item id. MSVC writes the record as `S_INLINESITE2`
+— the same thing with an invocation count in front of the annotations — and
+until purepdb read that kind, a python 3.12 `python312.pdb` showed 34 inline
+sites where there are 48642. With profile-guided optimisation, a body inlined
+into the cold half of a split function has its ranges in a *separated code
+chunk*: the annotations name the chunk by number (`ChangeCodeOffsetBase n`) and
+an `S_SEPCODE` record after the procedure's scope says where that chunk is. The
+21 sites in `_bz2.pdb` that went missing as "describing no code" were these.
+
+The annotation cursor has one rule worth writing down, because two readings of
+it are plausible and only a real file tells them apart. A standalone
+`ChangeCodeLength` closes a range and moves the cursor past it ("default next
+start"); the length fused into `ChangeCodeLengthAndCodeOffset` closes a range
+and *leaves the cursor where the range began*. Read the fused length as
+advancing and 5582 of python312.pdb's 79187 ranges end past the procedure or
+chunk that holds them; read it as llvm-pdbutil always has and none does.
 
 ## Some addresses are not variable addresses
 

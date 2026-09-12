@@ -170,7 +170,7 @@ TRUNCATABLE_KINDS = [
     codeview.S_PROCREF, codeview.S_LPROCREF,
     codeview.S_LABEL32, codeview.S_THUNK32, codeview.S_TRAMPOLINE,
     codeview.S_CONSTANT, codeview.S_UDT, codeview.S_COMPILE3,
-    codeview.S_INLINESITE, codeview.S_INLINESITE2,
+    codeview.S_INLINESITE, codeview.S_INLINESITE2, codeview.S_SEPCODE,
     codeview.S_GTHREAD32, codeview.S_LTHREAD32,
 ]
 

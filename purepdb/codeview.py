@@ -380,14 +380,64 @@ class InlineSite:
     enclosing procedure*, because that is how the annotations express them.
     `inlinee` is an item id into the IPI stream, not a name; `purepdb.ipi`
     turns it into one.
+
+    `separated_ranges` are `(chunk, offset, length)` triples for code the
+    annotations place in one of the procedure's separated code chunks -- the
+    cold half of a hot/cold split, which MSVC's profile-guided optimiser
+    writes as an `S_SEPCODE` record after the procedure's scope. `chunk` is
+    1-based in the order those records appear; the offset is relative to that
+    chunk's start, not the procedure's. Resolving one needs the module's
+    `S_SEPCODE` records, so the two lists are kept apart.
     """
 
     inlinee: int
     ranges: list[tuple[int, int]] = field(default_factory=list)
+    separated_ranges: list[tuple[int, int, int]] = field(default_factory=list)
 
     @property
     def code_size(self) -> int:
-        return sum(length for _offset, length in self.ranges)
+        return (sum(length for _offset, length in self.ranges)
+                + sum(length for _chunk, _offset, length in self.separated_ranges))
+
+
+@dataclass
+class SepCode:
+    """S_SEPCODE: a range of a procedure's code moved away from its body.
+
+    Profile-guided optimisation splits a function into a hot part, which
+    stays where the procedure record says, and a cold part, which the linker
+    lays out elsewhere. This names the cold part: its own `segment:offset`
+    and `length`, and the `segment:offset` of the procedure it belongs to.
+    The record sits after the procedure's `S_END` rather than inside its
+    scope, so the parent address is the link.
+    """
+
+    segment: int
+    offset: int
+    length: int
+    flags: int
+    parent_segment: int
+    parent_offset: int
+
+
+def parse_sepcode(payload: bytes) -> SepCode:
+    r = Reader(payload)
+    r.u32()  # Parent
+    r.u32()  # End
+    length = r.u32()
+    flags = r.u32()
+    offset = r.u32()
+    parent_offset = r.u32()
+    segment = r.u16()
+    parent_segment = r.u16()
+    return SepCode(segment=segment, offset=offset, length=length, flags=flags,
+                   parent_segment=parent_segment, parent_offset=parent_offset)
+
+
+def extract_sepcodes(data: bytes) -> list[SepCode]:
+    """S_SEPCODE records, in stream order -- which is what numbers them."""
+    return _decoded(parse_sepcode,
+                    (r for r in iter_records(data) if r.kind == S_SEPCODE))
 
 
 def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
@@ -410,6 +460,14 @@ def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
 
     site = InlineSite(inlinee=inlinee)
     code_offset = 0
+    chunk = 0  # 0 is the procedure's own body; n is its n'th separated chunk
+
+    def place(offset: int, length: int) -> None:
+        if chunk == 0:
+            site.ranges.append((offset, length))
+        else:
+            site.separated_ranges.append((chunk, offset, length))
+
     try:
         while not r.eof():
             opcode = _uncompress(r)
@@ -425,9 +483,20 @@ def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
             first = _uncompress(r)
             if first is None:
                 break
-            # The cursor is a running offset from the procedure's start. A
-            # length both closes a range and moves the cursor past it, so the
-            # next offset delta is measured from the end of the last range.
+            # The cursor is a running offset from the start of the chunk the
+            # ranges are in. The two opcodes that close a range treat it
+            # differently, and the difference is not a matter of taste: a
+            # standalone length is "length of code, default next start" in
+            # cvinfo.h, so the next delta is measured from the end of the
+            # range it closed; the length fused into
+            # ChangeCodeLengthAndCodeOffset does *not* move the cursor, and
+            # the next delta is measured from where that range began. Treating
+            # the two alike -- which this parser did until 0.6.0 -- placed the
+            # second and later ranges of an MSVC site past the end of the
+            # procedure 5582 times in one python312.pdb, and past the end of
+            # the cold chunk they were in; measured from the range's start,
+            # none of 79187 ranges overflows or overlaps. It is also the
+            # reading llvm-pdbutil has always used.
             if opcode == _BA_TWO_OPERANDS:
                 # The only opcode taking two operands, handled here so the
                 # second one is read and used in the same place.
@@ -435,23 +504,25 @@ def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
                 if second is None:
                     break
                 code_offset += second
-                site.ranges.append((code_offset, first))
-                code_offset += first
+                place(code_offset, first)
             elif opcode in (BA_OP_CODE_OFFSET, BA_OP_CHANGE_CODE_OFFSET):
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_AND_LINE_OFFSET:
                 # One operand packs both: the code delta in the low 4 bits.
                 code_offset += first & 0xF
             elif opcode == BA_OP_CHANGE_CODE_LENGTH:
-                site.ranges.append((code_offset, first))
+                place(code_offset, first)
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_BASE:
-                # Rebases the cursor rather than advancing it. Nothing in the
-                # corpus emits it, so the rebase is unverified -- and every
-                # range after it would be measured from a base we did not
-                # apply. Stop, the way an undecodable operand does: the ranges
-                # already found are real, and a short answer beats a wrong one.
-                break
+                # "nth separated code chunk (main code chunk == 0)", per
+                # cvinfo.h: the ranges that follow are in the procedure's
+                # n'th S_SEPCODE chunk, measured from its start. MSVC's
+                # profile-guided optimiser emits it first thing for a body
+                # inlined into the cold half of a split function -- 21 of
+                # the 103 sites in a python 3.12 _bz2.pdb -- and every one
+                # of those used to be dropped as describing no code.
+                chunk = first
+                code_offset = 0
     except EOFError:
         pass
     return site
@@ -1098,6 +1169,7 @@ _RECORD_PARSERS: dict[int, Callable[[int, bytes], object]] = {
     S_CONSTANT: lambda _kind, payload: parse_constant(payload),
     S_UDT: lambda _kind, payload: parse_udt(payload),
     S_COMPILE3: lambda _kind, payload: parse_compile_info(payload),
+    S_SEPCODE: lambda _kind, payload: parse_sepcode(payload),
     **dict.fromkeys(INLINE_SITE_KINDS, parse_inline_site_record),
     **dict.fromkeys(PROC_KINDS, parse_proc),
     **dict.fromkeys(_DATA_KINDS, parse_data),

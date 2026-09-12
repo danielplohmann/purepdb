@@ -125,14 +125,27 @@ out of the tuples on both sides, a note says so, and the sites are compared and
 counted like any others. Skipping the whole check there would throw away 140
 verified comparisons to avoid one bad field.
 
-Where the two implementations genuinely read the same bytes differently, the
-harness has to say which reading it is comparing and why. `llvm-pdbutil` moves
-its inline-site cursor past the length of a standalone `ChangeCodeLength` and
-not past the one fused into `ChangeCodeLengthAndCodeOffset`; purepdb moves it
-for both, which is the reading that makes the two opcodes mean the same thing.
-The check rebuilds the ranges from the deltas, and tracks llvm's own cursor
-beside them so that the day this stops being true, the run says so instead of
-comparing against a rule that no longer holds.
+Where the two implementations once read the same bytes differently, the
+harness said which reading it was comparing and why — and that record is worth
+keeping because the reading was wrong. `llvm-pdbutil` moves its inline-site
+cursor past the length of a standalone `ChangeCodeLength` and not past the one
+fused into `ChangeCodeLengthAndCodeOffset`; purepdb moved it for both until
+0.6.0, on the argument that this made the two opcodes mean the same thing, and
+the harness rebuilt the ranges on purepdb's rule so that the two agreed. Nothing
+in the corpus could tell the readings apart: every fixture's sites are short
+enough to fit their procedure either way. The python 3.12 PDBs are not — under
+purepdb's rule 5582 of their 79187 ranges end past the procedure or the cold
+chunk they are in, and under llvm's none does, and none overlaps. A rule that
+puts code where no code is has been measured against the file, which is the
+only argument that settles a format question. The harness now models llvm's
+cursor, still checks it against every absolute offset the tool prints, and
+purepdb agrees with it on all 42 files that have inline sites.
+
+What a reference *cannot* see it cannot confirm. `llvm-pdbutil` 18 prints an
+`S_INLINESITE2` record as a size and nothing else, and that is the form MSVC
+writes 48608 of python312.pdb's 48642 sites in. Those sites are left out of the
+comparison with a note saying how many, and their placement rests on the
+overflow argument above and on the `S_SEPCODE` chunk lengths they fit exactly.
 
 ## 5. Fuzzing the boundary, not the format
 

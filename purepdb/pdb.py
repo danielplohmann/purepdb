@@ -129,6 +129,9 @@ class InlineFunction:
     parent: str          # the procedure this body was inlined into
     parent_offset: int   # that procedure's entry point, which names repeat
     parent_code_size: int
+    record_kind: int = codeview.S_INLINESITE
+    """Which record described the site: `S_INLINESITE`, or `S_INLINESITE2`,
+    the form with an invocation count that MSVC writes."""
 
     @property
     def code_size(self) -> int:
@@ -274,9 +277,11 @@ class Diagnostics:
     length loses the name too and `constants()` is that much shorter."""
     unplaced_inline_sites: int = 0
     """S_INLINESITE records `inline_sites()` cannot report: their annotations
-    describe no code, or no open procedure encloses them, so there is no
-    address to give. `inline_sites` counts the records; this counts the ones
-    missing from the listing."""
+    describe no code, they place it in a separated code chunk the module has
+    no S_SEPCODE record for, or no open procedure encloses them, so there is
+    no address to give. `inline_sites` counts the records; this counts the
+    ones missing from the listing. A site reported twice because its chunks
+    are in two sections counts once."""
     private_symbols_stripped: bool = False
     """The DBI header's stripped flag, which `link.exe /PDBSTRIPPED` sets.
 
@@ -501,8 +506,10 @@ class Diagnostics:
         if self.unplaced_inline_sites:
             out.append(
                 f"{self.unplaced_inline_sites} inline site(s) have no address "
-                f"to report: their annotations describe no code, or no open "
-                f"procedure encloses them, so inline_sites() leaves them out"
+                f"to report: their annotations describe no code, or place it "
+                f"in a separated code chunk the module has no S_SEPCODE "
+                f"record for, or no open procedure encloses them, so "
+                f"inline_sites() leaves them out"
             )
         if self.line_bytes and not self.has_string_table:
             out.append(
@@ -909,31 +916,55 @@ class PDB:
         Names come from the IPI stream, which is the only place they exist --
         `S_INLINESITE` names its inlinee by item id. Without that stream the
         sites are still located, and `name` is empty.
+
+        A body inlined into the cold half of a split function has its ranges
+        in one of the procedure's separated code chunks, which the annotations
+        name by number and the module's `S_SEPCODE` records locate. Those
+        ranges join the site's others when the chunk is in the same section,
+        which is where the linker puts it; a chunk in another section is
+        reported as a second `InlineFunction` for the same site, since one
+        entry has one `segment`.
+        """
+        return self._inline_listing()[0]
+
+    def _inline_listing(self) -> tuple[list[InlineFunction], int]:
+        """`inline_sites()` and the number of records it placed.
+
+        The two differ when a site's separated chunk sits in another section
+        and it is listed once per section; `diagnose()` counts records.
         """
         ids = self.id_table()
         out: list[InlineFunction] = []
+        placed = 0
         for mod in self.dbi.modules:
             body = self.module_symbol_bytes(mod)
             if not body:
                 continue
             procs: list[tuple[int, codeview.ProcSymbol]] = []
-            sites: list[tuple[int, codeview.InlineSite]] = []
+            sites: list[tuple[int, int, codeview.InlineSite]] = []
+            # The separated chunks of each procedure, keyed by the address the
+            # record names as its parent, in the order that numbers them.
+            chunks: dict[tuple[int, int], list[codeview.SepCode]] = {}
             for rec in codeview.iter_records(body):
                 try:
                     if rec.kind in codeview.PROC_KINDS:
                         procs.append((rec.offset + CV_SIGNATURE_SIZE,
                                       codeview.parse_proc(rec.kind, rec.payload)))
                     elif rec.kind in codeview.INLINE_SITE_KINDS:
-                        sites.append((rec.offset + CV_SIGNATURE_SIZE,
+                        sites.append((rec.offset + CV_SIGNATURE_SIZE, rec.kind,
                                       codeview.parse_inline_site(rec.payload,
                                                                  rec.kind)))
+                    elif rec.kind == codeview.S_SEPCODE:
+                        sep = codeview.parse_sepcode(rec.payload)
+                        chunks.setdefault(
+                            (sep.parent_segment, sep.parent_offset), []).append(sep)
                 except EOFError:
                     continue  # shorter than its kind requires; skip the record
             if not sites:
                 continue
 
             starts = [start for start, _proc in procs]
-            for site_offset, site in sites:
+            for site_offset, kind, site in sites:
                 # The enclosing procedure is the last one to start before this
                 # record and still be open at it; its End says where it closes.
                 i = bisect.bisect_right(starts, site_offset) - 1
@@ -942,23 +973,36 @@ class PDB:
                 _start, proc = procs[i]
                 if proc.end and site_offset >= proc.end:
                     continue
-                # Annotation offsets are relative to the procedure's start.
-                ranges = [(proc.offset + offset, length)
-                          for offset, length in site.ranges]
-                if not ranges:
+                # Annotation offsets are relative to the procedure's start,
+                # or to the start of the chunk they name.
+                by_segment: dict[int, list[tuple[int, int]]] = {}
+                if site.ranges:
+                    by_segment[proc.segment] = [(proc.offset + offset, length)
+                                                for offset, length in site.ranges]
+                own = chunks.get((proc.segment, proc.offset), [])
+                for chunk, offset, length in site.separated_ranges:
+                    if not 1 <= chunk <= len(own):
+                        continue  # names a chunk the module does not carry
+                    sep = own[chunk - 1]
+                    by_segment.setdefault(sep.segment, []).append(
+                        (sep.offset + offset, length))
+                if not by_segment:
                     continue
-                out.append(InlineFunction(
-                    name=(ids.get(site.inlinee) if ids else None) or "",
-                    inlinee=site.inlinee,
-                    segment=proc.segment,
-                    offset=ranges[0][0],
-                    rva=self._rva(proc.segment, ranges[0][0]),
-                    ranges=ranges,
-                    parent=proc.name,
-                    parent_offset=proc.offset,
-                    parent_code_size=proc.code_size,
-                ))
-        return out
+                placed += 1
+                for segment, ranges in by_segment.items():
+                    out.append(InlineFunction(
+                        name=(ids.get(site.inlinee) if ids else None) or "",
+                        inlinee=site.inlinee,
+                        segment=segment,
+                        offset=ranges[0][0],
+                        rva=self._rva(segment, ranges[0][0]),
+                        ranges=ranges,
+                        parent=proc.name,
+                        parent_offset=proc.offset,
+                        parent_code_size=proc.code_size,
+                        record_kind=kind,
+                    ))
+        return out, placed
 
     def data_symbols(self) -> list[codeview.DataSymbol]:
         """Global and static data symbols (S_GDATA32/S_LDATA32), each once.
@@ -1237,7 +1281,7 @@ class PDB:
             # under two different explanations.
             unplaced_inline_sites=(inline_records
                                    - malformed_inline
-                                   - len(self.inline_sites())),
+                                   - self._inline_listing()[1]),
             proc_refs=proc_refs,
             proc_ref_targets=proc_ref_targets,
             unresolvable_proc_refs=unresolvable_refs,

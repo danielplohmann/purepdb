@@ -175,6 +175,15 @@ def inline_site(*, inlinee: int, annotations: bytes) -> bytes:
     return make_record(0x114D, payload)
 
 
+def sepcode(*, segment: int, offset: int, length: int,
+            parent_segment: int, parent_offset: int) -> bytes:
+    """S_SEPCODE, closed by S_END: a chunk of a procedure's code laid out
+    elsewhere, naming the procedure by address."""
+    payload = struct.pack("<IIIIIIHH", 0, 0, length, 0, offset, parent_offset,
+                          segment, parent_segment)
+    return make_record(0x1132, payload) + make_record(0x0006, b"")
+
+
 def inline_site2(*, inlinee: int, annotations: bytes, invocations: int = 1) -> bytes:
     """S_INLINESITE2: the same record with an invocation count before the
     annotations."""

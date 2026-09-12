@@ -93,7 +93,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from purepdb import PDB, PdbError
+from purepdb import PDB, PdbError, codeview
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = REPO / "tests" / "data"
@@ -133,6 +133,14 @@ _CANNOT_ANSWER = (
     ("PDB does not contain the requested image section header type",
      "this file has no section-header stream (optional debug header slot 5), "
      "which llvm-pdbutil needs before it will name a contribution's section"),
+    # The five XP-era public symbol files on Microsoft's symbol server take
+    # llvm-pdbutil 18 down in TpiStream::getNumTypeRecords on any dump that
+    # opens the type stream, `--publics` included. A reference that crashed
+    # verified nothing and contradicted nothing; purepdb reads the files, and
+    # pdbparse agrees with it on every public in them.
+    ("PLEASE submit a bug report",
+     "llvm-pdbutil crashed on this file, so it cannot serve as the reference "
+     "for it"),
 )
 
 
@@ -432,7 +440,11 @@ def check_udts(pdb: PDB, text: str) -> Result:
 
 # `SC[...]` is the Ver60 table and `SC2[...]` the V2 one, which differs only by
 # a trailing `coff section` field. purepdb reads both, so both are compared.
-_SC = re.compile(r"^\s*SC2?\[(?P<section>[^\]]*)\]\s*\| mod = (?P<mod>\d+), "
+# The section name is printed as the eight raw bytes of the header, and a
+# Windows kernel has one whose name is followed by bytes that are not text
+# (`PAGEVRFY\x1c!\x03` in ntkrnlmp), so the name is whatever sits between the
+# brackets and the ` | mod` that follows, and not "anything but a bracket".
+_SC = re.compile(r"^\s*SC2?\[(?P<section>.*?)\]\s*\| mod = (?P<mod>\d+), "
                  r"(?P<segment>\d+):(?P<offset>\d+), size = (?P<size>\d+)")
 _SC_ANY = re.compile(r"^\s*SC")
 
@@ -628,23 +640,19 @@ _CLOSES_A_RANGE = (_BA_CHANGE_CODE_LENGTH,
 def inline_site_ranges(rec: RefRecord) -> list[tuple[int, int]]:
     """The code ranges one S_INLINESITE covers, relative to its procedure.
 
-    Rebuilt from the deltas rather than read off the absolute offsets llvm
-    prints, because on some files those two disagree and the deltas are the
-    part both sides read the same way. `ChangeCodeLength` moves
-    llvm's cursor past the range it closed; the length fused into
-    `ChangeCodeLengthAndCodeOffset` does not move it, so from the second range
-    on, a site built out of the fused opcode prints every offset short by the
-    lengths before it. A cursor that a range's length advances is the reading
-    that makes the two opcodes mean the same thing, and it is what purepdb
-    does.
-
-    llvm's own cursor is tracked beside it and checked against every absolute
-    offset printed. That is what keeps this from being an assumption: the day
-    the tool stops behaving this way, the run says so rather than comparing
-    against a rule that no longer holds.
+    Rebuilt from the deltas and checked against the absolute offsets llvm
+    prints, so that a change in how the tool renders an annotation is a
+    `ParseError` here rather than a silent disagreement. The cursor rule is
+    llvm's, which is also cvinfo.h's and, since 0.6.0, purepdb's: a
+    standalone `ChangeCodeLength` moves the cursor past the range it closed
+    ("default next start"), and the length fused into
+    `ChangeCodeLengthAndCodeOffset` does not, so the next delta is measured
+    from where that range began. purepdb read the fused one the other way
+    until the python 3.12 PDBs showed 5582 ranges placed past the end of
+    their procedure by it, and none by this rule; the 0.5.0 note that called
+    llvm's cursor the odd one out had it backwards.
     """
-    offset = 0  # the cursor a range's length advances
-    theirs = 0  # llvm-pdbutil's, which only a standalone length advances
+    offset = 0  # the cursor, which only a standalone length advances
     ranges: list[tuple[int, int]] = []
     for line in rec.body:
         annotation = _ANNOTATION.match(line)
@@ -665,17 +673,15 @@ def inline_site_ranges(rec: RefRecord) -> list[tuple[int, int]]:
             step = int(delta, 16)
             if not end:
                 offset += step
-                theirs += step
-                expected = theirs
+                expected = offset
             else:
                 if opcode not in _CLOSES_A_RANGE:
                     raise ParseError(f"annotation {opcode} closed a code "
                                      f"range, which only 04 and 0C do")
                 ranges.append((offset, step))
-                offset += step
-                expected = theirs + step
+                expected = offset + step
                 if opcode == _BA_CHANGE_CODE_LENGTH:
-                    theirs += step
+                    offset += step
             if int(value, 16) != expected:
                 raise ParseError(
                     f"llvm-pdbutil's inline-site cursor reads 0x{expected:X} "
@@ -697,8 +703,15 @@ def check_inline_sites(pdb: PDB, text: str, named: bool) -> Result:
             return (parent, inlinee, ranges)
         return (parent, inlinee, _shortened_like_llvm(name), ranges)
 
+    # llvm-pdbutil 18 prints an S_INLINESITE2 record as a size and nothing
+    # else -- no inlinee, no annotations -- so the sites MSVC writes in that
+    # form (48608 of the 48642 in python312.pdb) cannot be compared against
+    # it, and are left out of both sides with a note saying how many.
     ours = [site(s.parent, s.inlinee, s.name, tuple(s.ranges))
-            for s in pdb.inline_sites()]
+            for s in pdb.inline_sites()
+            if s.record_kind != codeview.S_INLINESITE2]
+    undecoded = sum(1 for s in pdb.inline_sites()
+                    if s.record_kind == codeview.S_INLINESITE2)
 
     theirs = []
     proc: tuple[str, int] | None = None  # (name, offset) of the enclosing proc
@@ -734,6 +747,10 @@ def check_inline_sites(pdb: PDB, text: str, named: bool) -> Result:
         "llvm-pdbutil reports no ID stream for this file, so it resolved every "
         "inlinee id against the TPI and printed a type name; names not compared"
     ]
+    if undecoded:
+        notes.append(f"{undecoded} S_INLINESITE2 site(s) not compared: "
+                     f"llvm-pdbutil 18 prints the record's size and nothing "
+                     f"else")
     return Result(ours, theirs, notes)
 
 
