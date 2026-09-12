@@ -199,6 +199,24 @@ def test_an_inline_site_is_named_and_placed():
     assert site.code_size == 3
 
 
+def test_an_inline_site2_record_is_placed_like_an_inline_site():
+    """S_INLINESITE2 is S_INLINESITE with an invocation count before the
+    annotations. Reading the annotations from where S_INLINESITE keeps them
+    would decode the count as opcodes."""
+    from tests._synth import inline_site2
+
+    sites = inline_site2(inlinee=0x1000, invocations=7,
+                         annotations=bytes([0x0B, 0x04, 0x04, 0x03]))
+    pdb = _pdb(module_records=_proc_with_sites(sites),
+               ipi=ipi_stream([("func", "helper")]))
+    found = pdb.inline_sites()
+    assert [(s.name, s.ranges, s.rva) for s in found] == [("helper", [(0x44, 3)], 0x1044)]
+    d = pdb.diagnose()
+    assert d.inline_sites == 1
+    assert d.unplaced_inline_sites == 0
+    assert d.malformed_records == 0
+
+
 def test_several_sites_in_one_procedure():
     sites = (inline_site(inlinee=0x1000, annotations=bytes([0x0B, 0x04, 0x04, 0x03]))
              + inline_site(inlinee=0x1001, annotations=bytes([0x03, 0x20, 0x04, 0x08])))

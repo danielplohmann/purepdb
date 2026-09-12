@@ -33,6 +33,18 @@ resolve *differently* would be breaking, and would say so here.
   four fixtures it produced. `DbiStream.flags`, `build_number`, `is_stripped`,
   `incrementally_linked` and `toolchain_version` carry the same facts at the
   stream level, and the `diagnose` subcommand opens with a `linker` line.
+- MSF block sizes of 8192, 16384 and 32768 are accepted. The block map is one
+  block and has to name every block of the stream directory, so a PDB past a
+  few gigabytes is written with a larger block; those files were refused with
+  `unsupported block size`, a hard error on exactly the huge inputs. The set
+  is now the one `llvm-pdbutil` accepts.
+- `S_INLINESITE2` is decoded as an inline site. It is `S_INLINESITE` with an
+  invocation count between the inlinee and the annotations; reading the
+  annotations from where the older record keeps them would have decoded the
+  count as opcodes. Counted with the other kind in `Diagnostics.inline_sites`.
+- `S_LPROC32_DPC` and `S_LPROC32_DPC_ID` are procedures. `cvinfo.h` lists all
+  six kinds on the one `PROCSYM32` layout, so a body compiled for a DPC target
+  has an entry point like any other and now reaches `functions()`.
 - Pushing a `vX.Y.Z` tag now publishes the release. The workflow refuses to
   continue unless the tag matches both version strings, `CHANGELOG.md` has a
   section for it, the commit is on `main`, CI passed there, and a milestone
@@ -47,6 +59,20 @@ resolve *differently* would be breaking, and would say so here.
   and `testpypi` environments are configured once by a maintainer.
 - A pull request that changes `purepdb/` or `pyproject.toml` has to add a
   `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
+
+### Fixed
+
+- A stream directory whose block lists together describe more bytes than the
+  file holds is rejected. Each list is bounded by the directory, so every
+  per-stream check passed; but every block belongs to one stream, so the sizes
+  cannot sum past the file, and the sum is what `read_stream` allocates for --
+  a 4 MB file naming one block in every list read into gigabytes before a
+  byte of it was checked.
+- A `DEBUG_S_LINES` block whose `BlockSize` is smaller than the entries it
+  holds no longer has those entries re-read as the next block header. The
+  size cannot be less than what was just read out of the block, so the bytes
+  consumed are now the floor; a damaged size landing inside the entries used
+  to report lines made of line-record bytes.
 
 ## [0.5.0] - 2026-08-28
 

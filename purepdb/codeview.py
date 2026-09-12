@@ -31,6 +31,8 @@ S_LPROC32 = 0x110F     # local (static) procedure start
 S_GPROC32 = 0x1110     # global procedure start
 S_LPROC32_ID = 0x1146  # same layout, type index is an ID
 S_GPROC32_ID = 0x1147
+S_LPROC32_DPC = 0x1155     # same layout again: a procedure compiled for a DPC
+S_LPROC32_DPC_ID = 0x1156  # (C++ AMP) target, which cvinfo.h lists as PROCSYM32
 S_END = 0x0006
 S_PROC_ID_END = 0x114F
 
@@ -43,7 +45,8 @@ S_GTHREAD32 = 0x1113   # ... and external linkage
 S_PROCREF = 0x1125     # globals index entry for a global procedure
 S_LPROCREF = 0x1127    # ... and for a static one
 
-PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID})
+PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID,
+                        S_LPROC32_DPC, S_LPROC32_DPC_ID})
 _DATA_KINDS = frozenset({S_LDATA32, S_GDATA32})
 THREAD_KINDS = frozenset({S_LTHREAD32, S_GTHREAD32})
 PROC_REF_KINDS = frozenset({S_PROCREF, S_LPROCREF})
@@ -67,6 +70,9 @@ S_ENVBLOCK = 0x113D
 S_LOCAL = 0x113E
 S_INLINESITE = 0x114D
 S_INLINESITE_END = 0x114E
+S_INLINESITE2 = 0x115D  # S_INLINESITE plus an invocation count before the annotations
+S_SEPCODE = 0x1132      # a code range split off from its procedure (hot/cold)
+INLINE_SITE_KINDS = frozenset({S_INLINESITE, S_INLINESITE2})
 
 # Managed (.NET) code. A Windows-format PDB for a managed assembly describes
 # methods with these instead of S_*PROC32, keyed by metadata token rather than
@@ -106,8 +112,12 @@ KIND_NAMES: dict[int, str] = {
     S_ENVBLOCK: "S_ENVBLOCK",
     S_LOCAL: "S_LOCAL",
     S_INLINESITE: "S_INLINESITE",
+    S_INLINESITE2: "S_INLINESITE2",
+    S_SEPCODE: "S_SEPCODE",
     S_LPROC32_ID: "S_LPROC32_ID",
     S_GPROC32_ID: "S_GPROC32_ID",
+    S_LPROC32_DPC: "S_LPROC32_DPC",
+    S_LPROC32_DPC_ID: "S_LPROC32_DPC_ID",
     S_PROC_ID_END: "S_PROC_ID_END",
     S_MANSLOT: "S_MANSLOT",
     S_GMANPROC: "S_GMANPROC",
@@ -356,17 +366,23 @@ class InlineSite:
         return sum(length for _offset, length in self.ranges)
 
 
-def parse_inline_site(payload: bytes) -> InlineSite:
+def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
     """Decode the record and walk its annotations for the code it covers.
 
     A malformed or unrecognised annotation ends the walk: operand widths are
     what keep the stream in step, so there is nothing sensible to read past
     one. The ranges found before it are still real and are kept.
+
+    `S_INLINESITE2` is the same record with an invocation count between the
+    inlinee and the annotations; the count is stepped over, since how often a
+    body was inlined is not where it is.
     """
     r = Reader(payload)
     r.u32()  # Parent
     r.u32()  # End
     inlinee = r.u32()
+    if kind == S_INLINESITE2:
+        r.u32()  # invocations
 
     site = InlineSite(inlinee=inlinee)
     code_offset = 0
@@ -417,6 +433,11 @@ def parse_inline_site(payload: bytes) -> InlineSite:
     return site
 
 
+def parse_inline_site_record(kind: int, payload: bytes) -> InlineSite:
+    """`parse_inline_site` in the `(kind, payload)` convention the dispatch uses."""
+    return parse_inline_site(payload, kind)
+
+
 def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
     """Every S_INLINESITE in a module symbol region, with its record offset.
 
@@ -426,10 +447,10 @@ def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
     """
     out = []
     for rec in iter_records(data):
-        if rec.kind != S_INLINESITE:
+        if rec.kind not in INLINE_SITE_KINDS:
             continue
         try:
-            out.append((rec.offset, parse_inline_site(rec.payload)))
+            out.append((rec.offset, parse_inline_site(rec.payload, rec.kind)))
         except EOFError:
             continue
     return out
@@ -1053,7 +1074,7 @@ _RECORD_PARSERS: dict[int, Callable[[int, bytes], object]] = {
     S_CONSTANT: lambda _kind, payload: parse_constant(payload),
     S_UDT: lambda _kind, payload: parse_udt(payload),
     S_COMPILE3: lambda _kind, payload: parse_compile_info(payload),
-    S_INLINESITE: lambda _kind, payload: parse_inline_site(payload),
+    **dict.fromkeys(INLINE_SITE_KINDS, parse_inline_site_record),
     **dict.fromkeys(PROC_KINDS, parse_proc),
     **dict.fromkeys(_DATA_KINDS, parse_data),
     **dict.fromkeys(PROC_REF_KINDS, parse_proc_ref),

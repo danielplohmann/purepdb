@@ -923,9 +923,10 @@ class PDB:
                     if rec.kind in codeview.PROC_KINDS:
                         procs.append((rec.offset + CV_SIGNATURE_SIZE,
                                       codeview.parse_proc(rec.kind, rec.payload)))
-                    elif rec.kind == codeview.S_INLINESITE:
+                    elif rec.kind in codeview.INLINE_SITE_KINDS:
                         sites.append((rec.offset + CV_SIGNATURE_SIZE,
-                                      codeview.parse_inline_site(rec.payload)))
+                                      codeview.parse_inline_site(rec.payload,
+                                                                 rec.kind)))
                 except EOFError:
                     continue  # shorter than its kind requires; skip the record
             if not sites:
@@ -1166,8 +1167,9 @@ class PDB:
                 continue
             with_symbols += 1
             malformed += codeview.count_malformed_records(body)
-            malformed_inline += codeview.count_malformed_records(
-                body, codeview.S_INLINESITE)
+            for inline_kind in codeview.INLINE_SITE_KINDS:
+                malformed_inline += codeview.count_malformed_records(
+                    body, inline_kind)
             report: list[codeview.Truncation] = []
             for kind, count in codeview.count_kinds(body, truncation=report).items():
                 kinds[kind] = kinds.get(kind, 0) + count
@@ -1210,6 +1212,7 @@ class PDB:
             thread_locals += sum(symrecord_kinds.get(k, 0)
                                  for k in codeview.THREAD_KINDS)
 
+        inline_records = sum(kinds.get(k, 0) for k in codeview.INLINE_SITE_KINDS)
         return Diagnostics(
             modules=len(self.dbi.modules),
             modules_with_symbols=with_symbols,
@@ -1223,7 +1226,7 @@ class PDB:
             omap_entries=len(self._omap) if self._omap else 0,
             has_original_sections=self._original_sections is not None,
             section_contributions=len(self._contributions),
-            inline_sites=kinds.get(codeview.S_INLINESITE, 0),
+            inline_sites=inline_records,
             labels=kinds.get(codeview.S_LABEL32, 0),
             undecoded_constants=undecoded_constants,
             # The gap between the records and the listing, which is the only
@@ -1232,7 +1235,7 @@ class PDB:
             # A record too short to parse is already reported as malformed, so
             # excluding it keeps one damaged record from being counted twice
             # under two different explanations.
-            unplaced_inline_sites=(kinds.get(codeview.S_INLINESITE, 0)
+            unplaced_inline_sites=(inline_records
                                    - malformed_inline
                                    - len(self.inline_sites())),
             proc_refs=proc_refs,
