@@ -92,13 +92,20 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, args.root)
     import purepdb
 
-    if args.mmap:
-        import mmap
+    # A file the parser refuses is part of the record too: the error it
+    # raises is what a caller sees, so the snapshot holds it, and a change
+    # that turns a refusal into a listing (or the reverse) is a difference.
+    try:
+        if args.mmap:
+            import mmap
 
-        with open(args.path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
-            snap = snapshot(purepdb.PDB.from_bytes(m))
-    else:
-        snap = snapshot(purepdb.PDB.open(args.path))
+            with open(args.path, "rb") as f, mmap.mmap(
+                    f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+                snap = snapshot(purepdb.PDB.from_bytes(m))
+        else:
+            snap = snapshot(purepdb.PDB.open(args.path))
+    except purepdb.PdbError as exc:
+        snap = {"error": f"{type(exc).__name__}: {exc}"}
     snap["_purepdb"] = str(Path(purepdb.__file__).resolve())
     json.dump(snap, sys.stdout, indent=0, sort_keys=True)
     print()

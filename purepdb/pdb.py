@@ -114,13 +114,16 @@ class Line:
         return self.line not in c13.LINE_MARKERS
 
 
-@dataclass
+@dataclass(slots=True)
 class InlineFunction:
     """A function the compiler pasted into another one instead of calling.
 
     It has no entry point of its own, so it is not a `Function` and does not
     appear in `functions()`. What it has is a name and the code it occupies
     inside its caller, which can be several disjoint ranges.
+
+    Slotted: a 355 MB node.pdb has 1.6 million of these, and the instance
+    dict each would otherwise carry was half the memory of the listing.
     """
 
     name: str
@@ -1037,6 +1040,8 @@ class PDB:
             return 0, 0
         placed = 0
         unnamed = 0
+        # Looked up once: `ids` is a table or None, and testing it per site
+        # asked its length 1.6 million times on node.pdb.
         name_of = ids.get if ids else None
         starts = [start for start, _proc in procs]
         for site_offset, kind, site in sites:

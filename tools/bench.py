@@ -32,9 +32,14 @@ import time
 from collections.abc import Callable, Sized
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# `--root` picks the checkout to import purepdb from, so the same script
+# times an unmodified tree. It has to be pulled out before the import.
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if "--root" in sys.argv:
+    _ROOT = sys.argv[sys.argv.index("--root") + 1]
+sys.path.insert(0, _ROOT)
 
-from purepdb import PDB
+from purepdb import PDB  # noqa: E402
 
 # Entry points, in the order they are timed. `open` is special-cased because
 # the others need its result; each of the rest takes the PDB and returns
@@ -110,11 +115,12 @@ def bench_file(path: str, repeat: int, profile: bool) -> dict:
         pstats.Stats(prof, stream=buf).sort_stats("cumulative").print_stats(40)
         prof_text = buf.getvalue()
 
-    return {"file": path, "bytes": size, "rows": rows, "profile": prof_text}
+    return {"file": path, "bytes": size, "rows": rows, "profile": prof_text,
+            "purepdb": str(Path(sys.modules["purepdb"].__file__ or "").parent)}
 
 
 def _print_table(report: dict) -> None:
-    print(f"{report['file']}  ({report['bytes'] / 1e6:.1f} MB)")
+    print(f"{report['file']}  ({report['bytes'] / 1e6:.1f} MB)  [{report['purepdb']}]")
     print(f"  {'op':<16}{'seconds':>10}{'count':>10}{'peak RSS MB':>14}")
     for row in report["rows"]:
         count = "" if row["count"] is None else str(row["count"])
@@ -133,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="also print cProfile's top 40 by cumulative time to stderr")
     parser.add_argument("--json", action="store_true",
                         help="emit one JSON document instead of the table")
+    parser.add_argument("--root", default=_ROOT,
+                        help="checkout whose purepdb package to time")
     args = parser.parse_args(argv)
 
     reports = []
