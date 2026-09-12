@@ -21,7 +21,7 @@ from tests._synth import (
 )
 
 # A record kind purepdb does not decode, with a plausible payload.
-UNKNOWN_KIND = 0x1167
+UNKNOWN_KIND = 0x1FFF
 
 
 def _pdb(*, module_records=b"", pub_records=(), section_stream=6):
@@ -68,7 +68,7 @@ def test_undecodable_module_streams_are_explained():
 
     warning = "\n".join(d.warnings)
     assert "no procedure records" in warning
-    assert "0x1167" in warning, "the unrecognised kind must be named"
+    assert "0x1fff" in warning, "the unrecognised kind must be named"
     assert "FASTLINK" in warning
     # The publics path still works, which is the whole point of saying so.
     assert [f.name for f in pdb.functions()] == ["thunk"]
