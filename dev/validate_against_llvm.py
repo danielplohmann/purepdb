@@ -18,7 +18,7 @@ those verified nothing, and a run that verified nothing must not print `ok`.
 A missing `llvm-pdbutil` exits 0 with a message, so running this is never a
 requirement; `--require-tool` makes it an error instead, which is what CI does.
 
-Nine checks, over the subsystems whose accuracy was claimed in a PR
+Thirteen checks, over the subsystems whose accuracy was claimed in a PR
 description and nowhere else:
 
     procs               S_*PROC32 name, address and code size
@@ -26,6 +26,10 @@ description and nowhere else:
     labels              S_LABEL32 name and address
     constants           S_CONSTANT name and value
     udts                S_UDT name and type index
+    data                S_GDATA32/S_LDATA32 name, address and scope, each once
+    thread locals       S_GTHREAD32/S_LTHREAD32 the same way
+    thunks              S_THUNK32 name, address and size
+    trampolines         S_TRAMPOLINE kind, size, source and target section
     contributions       the Section Contribution table
     inline sites        each inlined body, its name, and every code range
     module attribution  the module each function is attributed to
@@ -156,6 +160,10 @@ class Check:
     name: str
     args: tuple[str, ...]  # what to pass to `llvm-pdbutil dump`
     compare: Callable[[PDB, str], Result]
+    optional: bool = False
+    """A check most files have nothing for -- thread-locals, trampolines --
+    is allowed to compare no record over a whole run. The others are not:
+    a run in which no file had a procedure verified nothing."""
 
 
 # --- running the reference implementation -----------------------------------
@@ -436,6 +444,93 @@ def check_udts(pdb: PDB, text: str) -> Result:
             raise ParseError(f"no type index on S_UDT `{rec.name}`")
         theirs.append((rec.name, int(index, 16)))
     return Result(ours, theirs)
+
+
+def check_data(pdb: PDB, text: str) -> Result:
+    """S_GDATA32/S_LDATA32, each once, from the module streams and the globals.
+
+    `data_symbols()` reads both and drops a record described in both on
+    (name, segment, offset, kind), so the reference is deduplicated the same
+    way -- the two dumps here are `--symbols` and `--globals` in one run, and
+    a static in both prints twice.
+    """
+    ours = sorted({(d.name, d.segment, d.offset, d.is_global)
+                   for d in pdb.data_symbols()})
+    theirs = set()
+    for rec in iter_records(text):
+        if rec.kind not in ("S_GDATA32", "S_LDATA32"):
+            continue
+        addr = rec.address()
+        if addr is None:
+            raise ParseError(f"no address on {rec.kind} `{rec.name}`")
+        theirs.add((rec.name, addr[0], addr[1], rec.kind == "S_GDATA32"))
+    return Result(ours, sorted(theirs))
+
+
+def check_thread_locals(pdb: PDB, text: str) -> Result:
+    """S_GTHREAD32/S_LTHREAD32, deduplicated the way `thread_locals()` is."""
+    ours = sorted({(t.name, t.segment, t.offset, t.is_global)
+                   for t in pdb.thread_locals()})
+    theirs = set()
+    for rec in iter_records(text):
+        if rec.kind not in ("S_GTHREAD32", "S_LTHREAD32"):
+            continue
+        addr = rec.address()
+        if addr is None:
+            raise ParseError(f"no address on {rec.kind} `{rec.name}`")
+        theirs.add((rec.name, addr[0], addr[1], rec.kind == "S_GTHREAD32"))
+    return Result(ours, sorted(theirs))
+
+
+def check_thunks(pdb: PDB, text: str) -> Result:
+    ours = [(t.name, t.segment, t.offset, t.length) for t in pdb.thunks()]
+    theirs = []
+    for rec in iter_records(text):
+        if rec.kind != "S_THUNK32":
+            continue
+        addr = rec.address()
+        size = rec.field(r"size = (\d+)")
+        if addr is None or size is None:
+            raise ParseError(f"no address or size on S_THUNK32 `{rec.name}`")
+        theirs.append((rec.name, addr[0], addr[1], int(size)))
+    return Result(ours, theirs)
+
+
+_TRAMPOLINE = re.compile(r"type = (?P<type>[\w ]+?), size = (?P<size>\d+), "
+                         r"source = (?P<ss>\d+):(?P<so>\d+), "
+                         r"target = (?P<ts>\d+):(?P<to>\d+)")
+_TRAMPOLINE_KINDS = {"tramp incremental": 0, "branch island": 1}
+
+
+def check_trampolines(pdb: PDB, text: str) -> Result:
+    """S_TRAMPOLINE by kind, size, source and target *section*.
+
+    The target offset is left out: llvm-pdbutil 18 prints the thunk's own
+    offset in the target slot (`source = 0001:0005, target = 0001:0005` for
+    all 348 in sqlite3 x64), so the field it shows is not the record's.
+    purepdb's target is checked against the image instead --
+    `test_trampolines_jump_where_the_record_says` follows the `jmp rel32` at
+    each source and lands on the target for every one.
+    """
+    ours = [(t.kind, t.size, t.segment, t.offset, t.target_segment)
+            for t in pdb.trampolines()]
+    theirs = []
+    for rec in iter_records(text):
+        if rec.kind != "S_TRAMPOLINE":
+            continue
+        m = None
+        for line in rec.body:
+            m = _TRAMPOLINE.search(line)
+            if m:
+                break
+        if m is None or m.group("type") not in _TRAMPOLINE_KINDS:
+            raise ParseError(f"unrecognised S_TRAMPOLINE body {rec.body!r}")
+        theirs.append((_TRAMPOLINE_KINDS[m.group("type")], int(m.group("size")),
+                       int(m.group("ss")), int(m.group("so")),
+                       int(m.group("ts"))))
+    notes = ["target offsets not compared: llvm-pdbutil 18 prints the "
+             "thunk offset there"] if theirs else []
+    return Result(ours, theirs, notes)
 
 
 # `SC[...]` is the Ver60 table and `SC2[...]` the V2 one, which differs only by
@@ -760,6 +855,11 @@ CHECKS = [
     Check("labels", ("--symbols",), check_labels),
     Check("constants", ("--globals",), check_constants),
     Check("udts", ("--globals",), check_udts),
+    Check("data", ("--symbols", "--globals"), check_data, optional=True),
+    Check("thread locals", ("--symbols", "--globals"), check_thread_locals,
+          optional=True),
+    Check("thunks", ("--symbols",), check_thunks, optional=True),
+    Check("trampolines", ("--symbols",), check_trampolines, optional=True),
     Check("contributions", ("--section-contribs",), check_contributions),
 ]
 
@@ -768,8 +868,9 @@ CHECKS = [
 LATE_CHECKS = ("inline sites", "module attribution", "lines")
 
 
-def check_names() -> list[str]:
-    return [check.name for check in CHECKS] + list(LATE_CHECKS)
+def check_names(*, required_only: bool = False) -> list[str]:
+    return ([check.name for check in CHECKS if not (required_only and check.optional)]
+            + list(LATE_CHECKS))
 
 
 # --- reporting --------------------------------------------------------------
@@ -950,7 +1051,8 @@ def main() -> int:
     # nothing, and two empty lists agree -- so without this it printed `ok`
     # and was indistinguishable from one that checked thousands. The same
     # reasoning as the empty-corpus guard above, one level further down.
-    if unverified := [name for name in check_names() if name not in verified]:
+    if unverified := [name for name in check_names(required_only=True)
+                      if name not in verified]:
         print(f"FAIL: {len(unverified)} check(s) compared no record on any "
               f"file, so they verified nothing:")
         for name in unverified:
