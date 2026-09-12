@@ -828,28 +828,63 @@ def find_truncation(data: bytes, start: int = 0) -> Truncation | None:
     return report[0] if report else None
 
 
+# The fixed portion of each named record, as one struct. A parser reads it
+# with a single unpack_from and finds the name's NUL with one `find`, rather
+# than walking a Reader field by field -- eight or nine method calls per
+# record, and parse_proc alone runs 35k times on a 20 MB PDB. The failure
+# contract is the Reader's: EOFError when the payload is shorter than the
+# fixed portion or the name has no terminator, which is what the extractors
+# and `count_malformed_records` catch.
+_PUBLIC_FIXED = struct.Struct("<IIH")          # Flags, Offset, Segment
+assert _PUBLIC_FIXED.size == 10
+_PROC_FIXED = struct.Struct(
+    "<I"   # Parent
+    "I"    # End
+    "I"    # Next
+    "I"    # CodeSize
+    "I"    # DbgStart
+    "I"    # DbgEnd
+    "I"    # FunctionType
+    "I"    # CodeOffset
+    "H"    # Segment
+    "B"    # Flags
+)
+assert _PROC_FIXED.size == 35
+_PROC_REF_FIXED = struct.Struct("<IIH")        # SumName, SymOffset, Module
+assert _PROC_REF_FIXED.size == 10
+_DATA_FIXED = struct.Struct("<IIH")            # Type, DataOffset, Segment
+assert _DATA_FIXED.size == 10
+_LABEL_FIXED = struct.Struct("<IHB")           # CodeOffset, Segment, Flags
+assert _LABEL_FIXED.size == 7
+_THUNK_FIXED = struct.Struct("<IIIIHHB")  # Parent, End, Next, Offset, Segment, Length, Ordinal
+assert _THUNK_FIXED.size == 21
+_UDT_FIXED = struct.Struct("<I")               # Type
+assert _UDT_FIXED.size == 4
+_COMPILE3_FIXED = struct.Struct("<IH4H4H")     # Flags, Machine, frontend x4, backend x4
+assert _COMPILE3_FIXED.size == 22
+_TRAMPOLINE = struct.Struct("<HHIIHH")   # Type, Size, ThunkOff, TargetOff, ThunkSect, TargetSect
+assert _TRAMPOLINE.size == 16
+
+
+def _fixed_then_name(payload: bytes, fixed: struct.Struct) -> tuple[tuple, str]:
+    """The fixed fields, then the NUL-terminated name that follows them."""
+    size = fixed.size
+    if len(payload) < size:
+        raise EOFError(f"read past end of buffer (need {size}, have {len(payload)})")
+    end = payload.find(b"\x00", size)
+    if end == -1:
+        raise EOFError("unterminated C string")
+    return fixed.unpack_from(payload, 0), payload[size:end].decode("utf-8", errors="replace")
+
+
 def parse_public(payload: bytes) -> PublicSymbol:
-    r = Reader(payload)
-    flags = r.u32()
-    offset = r.u32()
-    segment = r.u16()
-    name = r.cstring()
+    (flags, offset, segment), name = _fixed_then_name(payload, _PUBLIC_FIXED)
     return PublicSymbol(name=name, segment=segment, offset=offset, flags=flags)
 
 
 def parse_proc(kind: int, payload: bytes) -> ProcSymbol:
-    r = Reader(payload)
-    r.u32()  # Parent
-    end = r.u32()
-    r.u32()  # Next
-    code_size = r.u32()
-    r.u32()  # DbgStart
-    r.u32()  # DbgEnd
-    type_index = r.u32()
-    offset = r.u32()
-    segment = r.u16()
-    r.u8()   # ProcSymFlags
-    name = r.cstring()
+    (_parent, end, _next, code_size, _dbg_start, _dbg_end, type_index, offset,
+     segment, _flags), name = _fixed_then_name(payload, _PROC_FIXED)
     return ProcSymbol(
         name=name,
         segment=segment,
@@ -862,11 +897,10 @@ def parse_proc(kind: int, payload: bytes) -> ProcSymbol:
 
 
 def parse_proc_ref(kind: int, payload: bytes) -> ProcRef:
-    r = Reader(payload)
-    r.u32()  # SumName, a name hash; zero in everything we have seen
-    sym_offset = r.u32()
-    module = r.u16()  # 1-based
-    return ProcRef(name=r.cstring(), module_index=module - 1,
+    # SumName is a name hash, zero in everything we have seen; Module is
+    # 1-based.
+    (_sum_name, sym_offset, module), name = _fixed_then_name(payload, _PROC_REF_FIXED)
+    return ProcRef(name=name, module_index=module - 1,
                    sym_offset=sym_offset, kind=kind)
 
 
@@ -898,9 +932,8 @@ def parse_constant(payload: bytes) -> Constant | None:
 
 
 def parse_udt(payload: bytes) -> UserDefinedType:
-    r = Reader(payload)
-    type_index = r.u32()
-    return UserDefinedType(name=r.cstring(), type_index=type_index)
+    (type_index,), name = _fixed_then_name(payload, _UDT_FIXED)
+    return UserDefinedType(name=name, type_index=type_index)
 
 
 def extract_constants(data: bytes) -> list[Constant]:
@@ -1073,17 +1106,15 @@ class CompileInfo:
 
 
 def parse_compile_info(payload: bytes) -> CompileInfo:
-    r = Reader(payload)
-    flags = r.u32()  # the language is its low byte; the rest are feature bits
-    machine = r.u16()
-    frontend = (r.u16(), r.u16(), r.u16(), r.u16())
-    backend = (r.u16(), r.u16(), r.u16(), r.u16())
+    # The language is the low byte of the flags; the rest are feature bits.
+    (flags, machine, *versions), compiler = _fixed_then_name(payload, _COMPILE3_FIXED)
+    fe_major, fe_minor, fe_build, fe_qfe, be_major, be_minor, be_build, be_qfe = versions
     return CompileInfo(
         language=flags & 0xFF,
         machine=machine,
-        frontend=frontend,
-        backend=backend,
-        compiler=r.cstring(),
+        frontend=(fe_major, fe_minor, fe_build, fe_qfe),
+        backend=(be_major, be_minor, be_build, be_qfe),
+        compiler=compiler,
     )
 
 
@@ -1130,37 +1161,24 @@ def extract_compile_infos(data: bytes) -> list[CompileInfo]:
 
 
 def parse_thunk(payload: bytes) -> ThunkSymbol:
-    r = Reader(payload)
-    r.u32()  # Parent
-    r.u32()  # End
-    r.u32()  # Next
-    offset = r.u32()
-    segment = r.u16()
-    length = r.u16()
-    ordinal = r.u8()
-    name = r.cstring()
+    (_parent, _end, _next, offset, segment, length,
+     ordinal), name = _fixed_then_name(payload, _THUNK_FIXED)
     # Variant data keyed by `ordinal` follows the name; we do not decode it.
     return ThunkSymbol(name=name, segment=segment, offset=offset,
                        length=length, ordinal=ordinal)
 
 
 def parse_label(payload: bytes) -> LabelSymbol:
-    r = Reader(payload)
-    offset = r.u32()
-    segment = r.u16()
-    flags = r.u8()
-    return LabelSymbol(name=r.cstring(), segment=segment, offset=offset,
-                       flags=flags)
+    (offset, segment, flags), name = _fixed_then_name(payload, _LABEL_FIXED)
+    return LabelSymbol(name=name, segment=segment, offset=offset, flags=flags)
 
 
 def parse_trampoline(payload: bytes) -> Trampoline:
-    r = Reader(payload)
-    kind = r.u16()
-    size = r.u16()
-    offset = r.u32()
-    target_offset = r.u32()
-    segment = r.u16()
-    target_segment = r.u16()
+    if len(payload) < _TRAMPOLINE.size:
+        raise EOFError(f"read past end of buffer (need {_TRAMPOLINE.size}, "
+                       f"have {len(payload)})")
+    (kind, size, offset, target_offset, segment,
+     target_segment) = _TRAMPOLINE.unpack_from(payload, 0)
     return Trampoline(kind=kind, size=size, segment=segment, offset=offset,
                       target_segment=target_segment, target_offset=target_offset)
 
@@ -1195,11 +1213,7 @@ def extract_labels(data: bytes) -> list[LabelSymbol]:
 
 
 def parse_data(kind: int, payload: bytes) -> DataSymbol:
-    r = Reader(payload)
-    type_index = r.u32()
-    offset = r.u32()
-    segment = r.u16()
-    name = r.cstring()
+    (type_index, offset, segment), name = _fixed_then_name(payload, _DATA_FIXED)
     return DataSymbol(
         name=name, segment=segment, offset=offset,
         type_index=type_index, kind=kind,
@@ -1209,12 +1223,9 @@ def parse_data(kind: int, payload: bytes) -> DataSymbol:
 def parse_thread_local(kind: int, payload: bytes) -> ThreadLocalSymbol:
     """Same fixed portion as `parse_data`; see `ThreadLocalSymbol` for why the
     address it carries is not the same kind of address."""
-    r = Reader(payload)
-    type_index = r.u32()
-    offset = r.u32()
-    segment = r.u16()
+    (type_index, offset, segment), name = _fixed_then_name(payload, _DATA_FIXED)
     return ThreadLocalSymbol(
-        name=r.cstring(), segment=segment, offset=offset,
+        name=name, segment=segment, offset=offset,
         type_index=type_index, kind=kind,
     )
 
