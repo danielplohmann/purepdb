@@ -768,6 +768,58 @@ def count_malformed_records(data: bytes, kind: int | None = None) -> int:
     return total
 
 
+@dataclass
+class RecordSurvey:
+    """Everything one walk of a record stream can say about it, for diagnostics.
+
+    `count_kinds`, `count_malformed_records` and `find_truncation` each answer
+    one question with one walk; `diagnose()` asks all three of every module
+    stream, then walked them again for the procedures and inline sites. This
+    is the one walk that answers all of it, so a 400 MB file is read once.
+    """
+
+    kinds: collections.Counter[int] = field(default_factory=collections.Counter)
+    malformed: collections.Counter[int] = field(default_factory=collections.Counter)
+    """Per kind: records shorter than the kind requires. Its total is what
+    `count_malformed_records` answers, and its entry for a kind is what the
+    same function narrowed to that kind answers."""
+    kept: list[tuple[int, int, object]] = field(default_factory=list)
+    """`(offset, kind, decoded)` for the kinds the caller asked to keep, in
+    stream order. Only records that decoded are here; a short one is in
+    `malformed` instead, which keeps the two disjoint the way the extractors
+    and `count_malformed_records` keep them."""
+
+
+def survey_records(data: bytes, *, keep: frozenset[int] = frozenset(),
+                   truncation: list[Truncation] | None = None) -> RecordSurvey:
+    """Count every record by kind, try every dispatched parser, keep some.
+
+    Trying the parser on every dispatched kind is what makes `malformed`
+    exactly `count_malformed_records`'s answer, and it means a procedure or
+    an inline site the caller wants has already been decoded by the time it
+    is asked for, so `keep` costs nothing more than holding the result.
+    """
+    survey = RecordSurvey()
+    kinds = survey.kinds
+    malformed = survey.malformed
+    kept = survey.kept
+    parsers = _RECORD_PARSERS
+    for rec in iter_records(data, truncation=truncation):
+        kind = rec.kind
+        kinds[kind] += 1
+        parser = parsers.get(kind)
+        if parser is None:
+            continue
+        try:
+            decoded = parser(kind, rec.payload)
+        except EOFError:
+            malformed[kind] += 1
+            continue
+        if kind in keep:
+            kept.append((rec.offset, kind, decoded))
+    return survey
+
+
 def find_truncation(data: bytes, start: int = 0) -> Truncation | None:
     """Where `data` stops being a well-formed record stream, or None."""
     report: list[Truncation] = []

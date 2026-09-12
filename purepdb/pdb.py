@@ -561,6 +561,13 @@ class Diagnostics:
         return out
 
 
+# The kinds one walk of a module stream serves two listings from: procs and
+# thunks for `functions()`, procs and inline sites for `inline_sites()`.
+_PROC_AND_THUNK_KINDS = codeview.PROC_KINDS | {codeview.S_THUNK32}
+_PROC_AND_INLINE_KINDS = (codeview.PROC_KINDS | codeview.INLINE_SITE_KINDS
+                          | {codeview.S_SEPCODE})
+
+
 def _table_or_none(data: bytes) -> SectionTable | None:
     """A parsed section table, or None when it describes no sections.
 
@@ -987,12 +994,9 @@ class PDB:
             # The separated chunks of each procedure, keyed by the address the
             # record names as its parent, in the order that numbers them.
             chunks: dict[tuple[int, int], list[codeview.SepCode]] = {}
-            for rec in codeview.iter_records(body):
+            for rec in codeview.iter_records(body, kinds=_PROC_AND_INLINE_KINDS):
                 try:
-                    if rec.kind in codeview.PROC_KINDS:
-                        procs.append((rec.offset + CV_SIGNATURE_SIZE,
-                                      codeview.parse_proc(rec.kind, rec.payload)))
-                    elif rec.kind in codeview.INLINE_SITE_KINDS:
+                    if rec.kind in codeview.INLINE_SITE_KINDS:
                         sites.append((rec.offset + CV_SIGNATURE_SIZE, rec.kind,
                                       codeview.parse_inline_site(rec.payload,
                                                                  rec.kind)))
@@ -1000,56 +1004,85 @@ class PDB:
                         sep = codeview.parse_sepcode(rec.payload)
                         chunks.setdefault(
                             (sep.parent_segment, sep.parent_offset), []).append(sep)
+                    else:
+                        procs.append((rec.offset + CV_SIGNATURE_SIZE,
+                                      codeview.parse_proc(rec.kind, rec.payload)))
                 except EOFError:
                     continue  # shorter than its kind requires; skip the record
-            if not sites:
-                continue
-
-            starts = [start for start, _proc in procs]
-            for site_offset, kind, site in sites:
-                # The enclosing procedure is the last one to start before this
-                # record and still be open at it; its End says where it closes.
-                i = bisect.bisect_right(starts, site_offset) - 1
-                if i < 0:
-                    continue
-                _start, proc = procs[i]
-                if proc.end and site_offset >= proc.end:
-                    continue
-                # Annotation offsets are relative to the procedure's start,
-                # or to the start of the chunk they name.
-                by_segment: dict[int, list[tuple[int, int]]] = {}
-                if site.ranges:
-                    by_segment[proc.segment] = [(proc.offset + offset, length)
-                                                for offset, length in site.ranges]
-                own = chunks.get((proc.segment, proc.offset), [])
-                for chunk, offset, length in site.separated_ranges:
-                    if not 1 <= chunk <= len(own):
-                        continue  # names a chunk the module does not carry
-                    sep = own[chunk - 1]
-                    by_segment.setdefault(sep.segment, []).append(
-                        (sep.offset + offset, length))
-                if not by_segment:
-                    continue
-                placed += 1
-                name = (ids.get(site.inlinee) if ids else None) or ""
-                if not name:
-                    unnamed += 1
-                if not keep:
-                    continue
-                for segment, ranges in by_segment.items():
-                    out.append(InlineFunction(
-                        name=name,
-                        inlinee=site.inlinee,
-                        segment=segment,
-                        offset=ranges[0][0],
-                        rva=self._rva(segment, ranges[0][0]),
-                        ranges=ranges,
-                        parent=proc.name,
-                        parent_offset=proc.offset,
-                        parent_code_size=proc.code_size,
-                        record_kind=kind,
-                    ))
+            n_placed, n_unnamed = self._place_module_sites(
+                ids, procs, sites, chunks, out if keep else None)
+            placed += n_placed
+            unnamed += n_unnamed
         return out, placed, unnamed
+
+    def _place_module_sites(
+        self,
+        ids: IdTable | None,
+        procs: list[tuple[int, codeview.ProcSymbol]],
+        sites: list[tuple[int, int, codeview.InlineSite]],
+        chunks: dict[tuple[int, int], list[codeview.SepCode]],
+        out: list[InlineFunction] | None,
+    ) -> tuple[int, int]:
+        """Place one module's inline sites in its procedures; the number
+        placed and the number of those without a name.
+
+        Offsets are record offsets in the module stream as stored, and the
+        lists are in stream order. Entries are appended to `out` when it is
+        given, and only counted when it is None. Shared by `_inline_listing`
+        and `diagnose()`, which decodes the same records in its one walk of
+        each module stream: the listing and the diagnostic have to agree on
+        what "placed" means, so they ask the same code.
+        """
+        if not sites:
+            return 0, 0
+        placed = 0
+        unnamed = 0
+        name_of = ids.get if ids else None
+        starts = [start for start, _proc in procs]
+        for site_offset, kind, site in sites:
+            # The enclosing procedure is the last one to start before this
+            # record and still be open at it; its End says where it closes.
+            i = bisect.bisect_right(starts, site_offset) - 1
+            if i < 0:
+                continue
+            _start, proc = procs[i]
+            if proc.end and site_offset >= proc.end:
+                continue
+            # Annotation offsets are relative to the procedure's start,
+            # or to the start of the chunk they name.
+            by_segment: dict[int, list[tuple[int, int]]] = {}
+            if site.ranges:
+                by_segment[proc.segment] = [(proc.offset + offset, length)
+                                            for offset, length in site.ranges]
+            own = chunks.get((proc.segment, proc.offset), [])
+            for chunk, offset, length in site.separated_ranges:
+                if not 1 <= chunk <= len(own):
+                    continue  # names a chunk the module does not carry
+                sep = own[chunk - 1]
+                by_segment.setdefault(sep.segment, []).append(
+                    (sep.offset + offset, length))
+            if not by_segment:
+                continue
+            placed += 1
+            name = (name_of(site.inlinee) if name_of else None) or ""
+            if not name:
+                unnamed += 1
+            if out is None:
+                continue
+            for segment, ranges in by_segment.items():
+                out.append(InlineFunction(
+                    name=name,
+                    inlinee=site.inlinee,
+                    segment=segment,
+                    offset=ranges[0][0],
+                    rva=self._rva(segment, ranges[0][0]),
+                    ranges=ranges,
+                    parent=proc.name,
+                    parent_offset=proc.offset,
+                    parent_code_size=proc.code_size,
+                    record_kind=kind,
+                ))
+        return placed, unnamed
 
     def data_symbols(self) -> list[codeview.DataSymbol]:
         """Global and static data symbols (S_GDATA32/S_LDATA32), each once.
@@ -1278,36 +1311,75 @@ class PDB:
         malformed = 0
         malformed_inline = 0
         line_bytes = 0
+        proc_records = 0
+        placed_sites = 0
+        unnamed_sites = 0
+        ids = self.id_table()
+        # One walk per module stream answers everything asked of it: the kind
+        # histogram, the malformed count, where it stopped, and -- because the
+        # malformed count is found by running every parser -- the decoded
+        # procedures and inline sites, which used to cost a second and third
+        # walk through `module_procs()` and `inline_sites()`. The procedure
+        # count is the proc-kind records less the malformed ones, which is
+        # exactly what `module_procs()` returns since `extract_procs` drops
+        # only the records `parse_proc` raises on.
         for mod in self.dbi.modules:
             line_bytes += len(self.module_c13_bytes(mod))
             body = self.module_symbol_bytes(mod)
             if not body:
                 continue
             with_symbols += 1
-            malformed += codeview.count_malformed_records(body)
-            for inline_kind in codeview.INLINE_SITE_KINDS:
-                malformed_inline += codeview.count_malformed_records(
-                    body, inline_kind)
             report: list[codeview.Truncation] = []
-            for kind, count in codeview.count_kinds(body, truncation=report).items():
+            survey = codeview.survey_records(
+                body, keep=_PROC_AND_INLINE_KINDS, truncation=report)
+            for kind, count in survey.kinds.items():
                 kinds[kind] = kinds.get(kind, 0) + count
+            malformed += sum(survey.malformed.values())
+            malformed_inline += sum(survey.malformed.get(k, 0)
+                                    for k in codeview.INLINE_SITE_KINDS)
             for t in report:
                 truncations.append((f"module {mod.index} ({mod.module_name})", t))
+            procs: list[tuple[int, codeview.ProcSymbol]] = []
+            sites: list[tuple[int, int, codeview.InlineSite]] = []
+            chunks: dict[tuple[int, int], list[codeview.SepCode]] = {}
+            for offset, kind, decoded in survey.kept:
+                if isinstance(decoded, codeview.InlineSite):
+                    sites.append((offset + CV_SIGNATURE_SIZE, kind, decoded))
+                elif isinstance(decoded, codeview.ProcSymbol):
+                    procs.append((offset + CV_SIGNATURE_SIZE, decoded))
+                elif isinstance(decoded, codeview.SepCode):
+                    chunks.setdefault(
+                        (decoded.parent_segment, decoded.parent_offset), []).append(decoded)
+            proc_records += len(procs)
+            # Placed and named the way `inline_sites()` places and names
+            # them, from the records this walk already decoded, without
+            # building the listing: on a 1.9 GB xul.pdb that is eleven
+            # million InlineFunction objects for an answer of two integers.
+            n_placed, n_unnamed = self._place_module_sites(ids, procs, sites, chunks, None)
+            placed_sites += n_placed
+            unnamed_sites += n_unnamed
 
         idx = self.dbi.symrecord_stream_index
         proc_refs = undecoded_constants = unresolvable_refs = 0
+        public_records = 0
         proc_ref_targets: dict[int, int] = {}
         thread_locals = sum(kinds.get(k, 0) for k in codeview.THREAD_KINDS)
         if self.msf.is_valid_stream(idx):
             symrecords = self.msf.read_stream(idx)
-            malformed += codeview.count_malformed_records(symrecords)
+            report = []
+            survey = codeview.survey_records(symrecords, truncation=report)
+            symrecord_kinds = survey.kinds
+            malformed += sum(survey.malformed.values())
+            # What `public_symbols()` returns: the S_PUB32 records less the
+            # ones `parse_public` raises on, which is the malformed count for
+            # that kind. Same list, without extracting it a second time.
+            public_records = (symrecord_kinds.get(codeview.S_PUB32, 0)
+                              - survey.malformed.get(codeview.S_PUB32, 0))
             undecoded_constants = codeview.count_undecoded_constants(symrecords)
-            t = codeview.find_truncation(symrecords)
-            if t is not None:
-                truncations.append(("the symbol-record stream", t))
+            if report:
+                truncations.append(("the symbol-record stream", report[0]))
             # Counted from the same read rather than through `proc_refs()`,
             # which would parse every ref to answer how many there are.
-            symrecord_kinds = codeview.count_kinds(symrecords)
             proc_refs = sum(symrecord_kinds.get(k, 0)
                             for k in codeview.PROC_REF_KINDS)
             # What those refs point at, which is the only way to say whether a
@@ -1331,12 +1403,11 @@ class PDB:
                                  for k in codeview.THREAD_KINDS)
 
         inline_records = sum(kinds.get(k, 0) for k in codeview.INLINE_SITE_KINDS)
-        _listing, placed_sites, unnamed_sites = self._inline_listing(keep=False)
         return Diagnostics(
             modules=len(self.dbi.modules),
             modules_with_symbols=with_symbols,
-            proc_records=len(self.module_procs()),
-            public_records=len(self.public_symbols()),
+            proc_records=proc_records,
+            public_records=public_records,
             has_section_headers=self._sections is not None,
             module_kinds=kinds,
             malformed_records=malformed,
@@ -1350,15 +1421,14 @@ class PDB:
             undecoded_constants=undecoded_constants,
             # The gap between the records and the listing, which is the only
             # way a caller learns that a site was found and could not be
-            # placed. Decoding them costs 0.03s on the 3797-site fixture.
-            # A record too short to parse is already reported as malformed, so
-            # excluding it keeps one damaged record from being counted twice
-            # under two different explanations.
+            # placed. A record too short to parse is already reported as
+            # malformed, so excluding it keeps one damaged record from being
+            # counted twice under two different explanations.
             unplaced_inline_sites=(inline_records
                                    - malformed_inline
                                    - placed_sites),
             unnamed_inline_sites=unnamed_sites,
-            has_id_table=self.id_table() is not None,
+            has_id_table=ids is not None,
             proc_refs=proc_refs,
             proc_ref_targets=proc_ref_targets,
             unresolvable_proc_refs=unresolvable_refs,
@@ -1407,7 +1477,22 @@ class PDB:
             elif name != fn.name and name not in fn.aliases:
                 fn.aliases.append(name)
 
-        for p in self.module_procs():
+        # Procs and thunks live in the same module streams, and each stream
+        # is read and walked once for both rather than once per listing.
+        procs: list[codeview.ProcSymbol] = []
+        thunks: list[codeview.ThunkSymbol] = []
+        for mod in self.dbi.modules:
+            body = self.module_symbol_bytes(mod)
+            for rec in codeview.iter_records(body, kinds=_PROC_AND_THUNK_KINDS):
+                try:
+                    if rec.kind == codeview.S_THUNK32:
+                        thunks.append(codeview.parse_thunk(rec.payload))
+                    else:
+                        procs.append(codeview.parse_proc(rec.kind, rec.payload))
+                except EOFError:
+                    continue  # shorter than its kind requires; skip the record
+
+        for p in procs:
             add((p.segment, p.offset), p.name, lambda p=p: Function(
                 name=p.name,
                 segment=p.segment,
@@ -1432,7 +1517,7 @@ class PDB:
                 module=module_name(pub.segment, pub.offset),
             ))
 
-        for t in self.thunks():
+        for t in thunks:
             add((t.segment, t.offset), t.name, lambda t=t: Function(
                 name=t.name,
                 segment=t.segment,
