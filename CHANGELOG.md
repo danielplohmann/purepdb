@@ -14,7 +14,27 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Pushing a `vX.Y.Z` tag now publishes the release. The workflow refuses to
+  continue unless the tag matches both version strings, `CHANGELOG.md` has a
+  section for it, the commit is on `main` and CI passed there; it then builds
+  the sdist and wheel in an isolated environment, installs the wheel into a
+  clean environment and runs it, uploads to PyPI through trusted publishing with
+  signed provenance, and creates the GitHub release from that version's
+  changelog section. Pre-release tags (`v1.2.3rc1`) are marked as such, and a
+  manual run rehearses the same path against TestPyPI. Before, publishing was
+  `make publish` with an API token and the tag workflow only attached
+  artefacts. See `RELEASING.md`; the trusted publisher and the `pypi` and
+  `testpypi` environments are configured once by a maintainer.
+- A pull request that changes `purepdb/` or `pyproject.toml` has to add a
+  `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
+
+### Removed
+
+- **Python 3.11 is no longer supported**; `requires-python` is `>=3.12`. Nothing
+  in the parser needed 3.12. The MCRIT ecosystem now shares a 3.12 floor so one
+  interpreter serves every component.
 
 ## [0.5.0] - 2026-08-28
 

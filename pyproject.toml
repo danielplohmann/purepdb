@@ -10,7 +10,7 @@ name = "purepdb"
 version = "0.5.0"
 description = "A minimal, dependency-free pure-Python parser for Microsoft PDB debug-info files"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "BSD-3-Clause"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Daniel Plohmann", email = "daniel.plohmann@fkie.fraunhofer.de" }]
@@ -24,7 +24,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -84,7 +83,7 @@ testpaths = ["tests"]
 filterwarnings = ["error"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 # The source wraps prose-style comments at 79; 100 leaves the few long format
 # tables and struct definitions alone rather than forcing them apart.
 line-length = 100

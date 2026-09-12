@@ -56,7 +56,7 @@ tests/              # pytest suite
 tools/fuzz.py       # the parse-boundary fuzzer; runs outside pytest
 tools/relink_omap.py  # CLI over tests/_relink.py
 dev/                # scratch, EXCEPT two validate_* scripts (see below)
-.github/workflows/  # ci.yml, fuzz.yml, release.yml, validate.yml
+.github/workflows/  # ci.yml, changelog.yml, fuzz.yml, publish-release.yml, validate.yml
 ```
 
 `dev/` is a scratch directory with two tracked exceptions: `.gitignore` holds
@@ -192,12 +192,12 @@ dropped, because folded bodies genuinely have several correct names.
 
 ## Code Conventions
 
-- **Linter:** Ruff. `line-length = 100`, `target-version = "py311"`. Selected
+- **Linter:** Ruff. `line-length = 100`, `target-version = "py312"`. Selected
   rules: `E, W, F, I, UP, B, C4, SIM, PIE, RUF`.
 - **Do not run `ruff format`.** See Gotchas — this project does not use the
   formatter, and running it would rewrite 28 of 37 files.
-- **Supported Python:** 3.11+ (`requires-python = ">=3.11"`). CI tests
-  3.11–3.14 on Linux plus 3.11 on macOS and Windows.
+- **Supported Python:** 3.12+ (`requires-python = ">=3.12"`). CI tests
+  3.12–3.14 on Linux plus 3.12 on macOS and Windows.
 - **Typing:** the package is fully typed and ships `py.typed`. `ty` checks it
   strictly; `[tool.ty.rules]` is deliberately empty so any future exemption has
   to be written down with a reason rather than passed as a CI flag.
@@ -246,23 +246,16 @@ not the count of symbols a release happens to recover from a given PDB.
 Recovering *more* symbols is an `Added`, even though `len(pdb.functions())`
 moves; making a previously-resolved address resolve *differently* is breaking.
 
-The version lives in **two** places that nothing else ties together:
-`pyproject.toml` `[project].version` and `purepdb/__init__.__version__`.
-`tests/test_version.py` asserts they agree. Bump both in one commit, or not at
-all.
+The version lives in **two** places: `pyproject.toml` `[project].version` and
+`purepdb/__init__.__version__`. `tests/test_version.py` asserts they agree and
+the release workflow refuses a tag that matches only one. Bump both in one
+commit, or not at all.
 
-To cut a release (maintainer action — do not do this unprompted):
-
-1. Move the `Unreleased` entries under a new `## [x.y.z] - YYYY-MM-DD` heading
-   and update the link definitions at the bottom of the file.
-2. Set the same version in `pyproject.toml` *and* `purepdb/__init__.py`.
-3. `git tag -a vx.y.z -m 'purepdb x.y.z'` and push the tag.
-
-Pushing the tag runs `release.yml`, which builds the artefacts, checks metadata
-with twine, **fails if the tag and the packaged version disagree**, runs the
-suite against what it built, and attaches the artefacts to the GitHub release.
-Publishing to PyPI stays manual (`make publish`) — automating it needs a stored
-token or a Trusted Publisher, which is a maintainer decision.
+Every PR that changes `purepdb/` adds its own entry under `## [Unreleased]`
+in `CHANGELOG.md`, or carries the `no-changelog` label; `changelog.yml`
+enforces it. The release process itself — cutting, rehearsing against TestPyPI,
+pre-releases, recovery — is in [`RELEASING.md`](RELEASING.md). Do not cut a
+release unprompted.
 
 ## Git Workflow
 
