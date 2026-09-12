@@ -178,6 +178,12 @@ def test_an_empty_module_list_is_explained():
     assert any("module list is empty" in w for w in d.warnings)
 
 
+def test_a_build_number_without_the_version_bit_is_not_a_version():
+    """XP-era files carry 0x3800 with the top bit clear, which read as 56.00."""
+    d = _publics_only(flags=0x0002, build_number=0x3800).diagnose()
+    assert d.linker_version == (0, 0)
+
+
 def test_a_healthy_pdb_reports_its_linker():
     pdb = _pdb(module_records=gproc32("main", 1, 0x10),
                pub_records=[pub32("main", 1, 0x10)])

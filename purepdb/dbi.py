@@ -191,7 +191,15 @@ class DbiStream:
 
     @property
     def toolchain_version(self) -> tuple[int, int]:
-        """`(major, minor)` of the linker, from BuildNumber; `(0, 0)` when unset."""
+        """`(major, minor)` of the linker, from BuildNumber, or `(0, 0)`.
+
+        The top bit says the field holds a version at all: the format's
+        documentation calls it NewVersionFormat, and the XP-era files on
+        Microsoft's symbol server have it clear with 0x3800 below it, which
+        is not 56.00 or any other version. Without the bit there is nothing
+        to read."""
+        if not self.build_number & 0x8000:
+            return (0, 0)
         return ((self.build_number >> 8) & 0x7F, self.build_number & 0xFF)
 
     def dbg_stream(self, slot: int) -> int:
