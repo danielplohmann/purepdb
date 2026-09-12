@@ -119,6 +119,11 @@ def _diagnose(pdb: PDB) -> None:
     from . import codeview
 
     d = pdb.diagnose()
+    major, minor = d.linker_version
+    version = f"{major}.{minor:02d}" if major else "not recorded"
+    notes = ["private symbols stripped"] if d.private_symbols_stripped else []
+    print(f"linker             : {version}"
+          f"{' (' + ', '.join(notes) + ')' if notes else ''}")
     print(f"modules            : {d.modules} "
           f"({d.modules_with_symbols} with symbols)")
     print(f"proc records       : {d.proc_records} "

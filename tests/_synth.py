@@ -278,7 +278,8 @@ def section_contributions(entries: list[tuple[int, int, int, int]],
 
 def dbi_stream(*, public_stream: int, symrecord_stream: int,
                module_list: bytes, dbg_header: list[int],
-               sec_map: bytes = b"", sec_contrib: bytes = b"") -> bytes:
+               sec_map: bytes = b"", sec_contrib: bytes = b"",
+               flags: int = 0, build_number: int = 0) -> bytes:
     dbg_bytes = struct.pack(f"<{len(dbg_header)}H", *dbg_header)
     header = struct.pack(
         "<iIIHHHHHHiiiiiIiiHHI",
@@ -286,7 +287,7 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         19990903,           # VersionHeader (V70)
         1,                  # Age
         0xFFFF,             # GlobalStreamIndex
-        0,                  # BuildNumber
+        build_number,       # BuildNumber
         public_stream,      # PublicStreamIndex
         0,                  # PdbDllVersion
         symrecord_stream,   # SymRecordStreamIndex
@@ -298,7 +299,7 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         0,                  # MFCTypeServerIndex
         len(dbg_bytes),     # OptionalDbgHeaderSize
         0,                  # ECSubstreamSize
-        0,                  # Flags
+        flags,              # Flags
         0x8664,             # Machine (AMD64)
         0,                  # Padding
     )

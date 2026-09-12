@@ -277,6 +277,21 @@ class Diagnostics:
     describe no code, or no open procedure encloses them, so there is no
     address to give. `inline_sites` counts the records; this counts the ones
     missing from the listing."""
+    private_symbols_stripped: bool = False
+    """The DBI header's stripped flag, which `link.exe /PDBSTRIPPED` sets.
+
+    A stripped PDB keeps its publics, its section headers and its FPO data and
+    drops every module's symbol stream, so it has no procedure records, no code
+    sizes and no line info by design. Without this bit that shape reads as
+    silence -- no module has symbols, so nothing walked them, so nothing was
+    reported -- which is what a listing with only publics in it needs
+    explained."""
+    linker_version: tuple[int, int] = (0, 0)
+    """`(major, minor)` of the linker that wrote the DBI stream, from its
+    BuildNumber, or `(0, 0)` when unset. `link.exe` writes its own version
+    -- 14.00 is VS2015, 14.29 is VS2019 16.11, 14.4x is VS2022 -- while every
+    LLVM linker writes 14.11 whatever its release, so the number dates a
+    Microsoft-linked file and only identifies the other kind."""
     thread_local_records: int = 0
     """S_GTHREAD32/S_LTHREAD32 records across the module streams and the
     symbol-record stream.
@@ -342,6 +357,35 @@ class Diagnostics:
                     "no section-header stream (Optional Debug Header slot 5) "
                     "and no usable Section Map: segment:offset cannot be "
                     "resolved, every rva is None"
+                )
+        if self.proc_records == 0 and not self.modules_with_symbols:
+            # No module stream was walked, so nothing above could have said
+            # why the listing holds publics and nothing else. The flag names
+            # the ordinary cause; without it, the same shape is a file whose
+            # module streams are gone for a reason the DBI does not record.
+            if self.private_symbols_stripped:
+                out.append(
+                    f"private symbols were stripped when this PDB was written "
+                    f"(the DBI header's stripped flag, which /PDBSTRIPPED "
+                    f"sets): none of the {self.modules} module(s) has a "
+                    f"symbol stream, so there are no procedure records, code "
+                    f"sizes or line info by design; function names can only "
+                    f"come from the {self.public_records} public records"
+                )
+            elif self.modules:
+                out.append(
+                    f"none of the {self.modules} module(s) has a symbol "
+                    f"stream, and the DBI header does not say the file was "
+                    f"stripped: there are no procedure records, code sizes "
+                    f"or line info, and function names can only come from "
+                    f"the {self.public_records} public records"
+                )
+            else:
+                out.append(
+                    f"the module list is empty: there are no procedure "
+                    f"records, code sizes or line info, and function names "
+                    f"can only come from the {self.public_records} public "
+                    f"records"
                 )
         if self.proc_records == 0 and self.modules_with_symbols:
             if self.managed_proc_records:
@@ -1198,6 +1242,8 @@ class PDB:
             has_string_table=self.string_table() is not None,
             pdb_info_error=pdb_info_error,
             module_list_stopped_at=self.dbi.module_list_stopped_at,
+            private_symbols_stripped=self.dbi.is_stripped,
+            linker_version=self.dbi.toolchain_version,
             thread_local_records=thread_locals,
         )
 

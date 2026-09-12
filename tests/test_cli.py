@@ -453,6 +453,7 @@ def test_info(sample, capsys):
 
 def test_diagnose(sample, capsys):
     out, _err = _run(capsys, "diagnose", sample)
+    assert out[0] == "linker             : not recorded"
     assert "modules            : 2 (1 with symbols)" in out
     assert "labels             : 1" in out
     assert "inline sites       : 1" in out

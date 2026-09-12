@@ -16,6 +16,23 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Added
 
+- `diagnose()` explains a PDB whose modules carry no symbol stream at all. That
+  is what `link.exe /PDBSTRIPPED` writes, and what every public symbol file on
+  Microsoft's symbol server is: publics, section headers and FPO data, with
+  every module's symbols gone by design. The shape produced no warning, because
+  every existing sentence is reached by walking a module stream and there was
+  none to walk -- a listing with publics and nothing else came back with no
+  explanation, and `code_size` was `None` throughout with nothing saying why.
+  `Diagnostics.private_symbols_stripped` reads the DBI header's stripped flag,
+  which the linker sets for the purpose; the warning names `/PDBSTRIPPED` when
+  the flag is set, says the header does not claim stripping when it is clear,
+  and covers an empty module list separately. `Diagnostics.linker_version` is
+  the DBI `BuildNumber` as `(major, minor)`: `link.exe` writes its own (14.00
+  is VS2015, 14.29 is VS2019 16.11), which is what dates a file when nothing
+  else does, and every LLVM linker writes 14.11 whatever its release, on all
+  four fixtures it produced. `DbiStream.flags`, `build_number`, `is_stripped`,
+  `incrementally_linked` and `toolchain_version` carry the same facts at the
+  stream level, and the `diagnose` subcommand opens with a `linker` line.
 - Pushing a `vX.Y.Z` tag now publishes the release. The workflow refuses to
   continue unless the tag matches both version strings, `CHANGELOG.md` has a
   section for it, the commit is on `main`, CI passed there, and a milestone
