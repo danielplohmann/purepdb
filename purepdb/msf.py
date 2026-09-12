@@ -169,19 +169,52 @@ class MsfFile:
     # -- block-level helpers ------------------------------------------------
 
     def _read_block(self, index: int) -> bytes:
+        """One block. Kept for the callers that read a stream a block at a
+        time; the stream reads below take whole runs instead."""
+        return self._read_blocks([index], self.super.block_size)
+
+    def _read_blocks(self, indices: list[int], size: int) -> bytes:
+        """The concatenation of `indices`' blocks, cut to `size` bytes.
+
+        Streams are mostly written in contiguous runs of blocks -- the 748
+        blocks of the sqlite x64 fixture form 94 runs, and a 355 MB node.pdb
+        holds its 86k blocks in a few thousand -- so each run is taken as one
+        slice instead of one slice per block, and a stream that is a single
+        run is one slice with no join at all. The bounds check is per run,
+        which is the same check as before: a run past the end has a block
+        past the end.
+        """
+        if not indices:
+            return b""
         bs = self.super.block_size
-        start = index * bs
-        end = start + bs
-        if end > len(self._data):
-            raise MsfError(f"block {index} out of range")
+        data = self._data
+        limit = len(data)
+        runs: list[bytes] = []
+        run_start = indices[0]
+        expect = run_start + 1
+        for index in indices[1:]:
+            if index != expect:
+                self._append_run(runs, run_start, expect - run_start, bs, limit)
+                run_start = index
+                expect = index
+            expect += 1
+        self._append_run(runs, run_start, expect - run_start, bs, limit)
+        buf = runs[0] if len(runs) == 1 else b"".join(runs)
+        return buf[:size] if len(buf) > size else buf
+
+    def _append_run(self, runs: list[bytes], first: int, count: int,
+                    bs: int, limit: int) -> None:
+        start = first * bs
+        end = start + count * bs
+        if end > limit:
+            # Named by the first block that does not fit, as the per-block
+            # read named it.
+            bad = first + max(0, (limit - start) // bs)
+            raise MsfError(f"block {bad} out of range")
         # `bytes(...)` costs nothing on the two cases that already return it
         # -- slicing `bytes` or an mmap -- and is what keeps a memoryview from
         # handing its own slices out through a public `-> bytes`.
-        return bytes(self._data[start:end])
-
-    def _read_blocks(self, indices: list[int], size: int) -> bytes:
-        buf = b"".join(self._read_block(i) for i in indices)
-        return buf[:size]
+        runs.append(bytes(self._data[start:end]))
 
     # -- directory ----------------------------------------------------------
 
