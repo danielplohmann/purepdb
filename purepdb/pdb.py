@@ -958,13 +958,18 @@ class PDB:
         """
         return self._inline_listing()[0]
 
-    def _inline_listing(self) -> tuple[list[InlineFunction], int, int]:
+    def _inline_listing(self, *, keep: bool = True) -> tuple[list[InlineFunction], int, int]:
         """`inline_sites()`, the number of records it placed, and the number
         of those whose inlinee the IPI stream has no name for.
 
         Entries and records differ when a site's separated chunk sits in
         another section and it is listed once per section; `diagnose()`
         counts records. The unnamed count is per record too.
+
+        `keep=False` counts without building the entries. `diagnose()` wants
+        the two numbers and not the listing, and on a 1.9 GB xul.pdb the
+        listing is eleven million `InlineFunction` objects -- 11 GB of them,
+        for a report whose answer is two integers.
         """
         ids = self.id_table()
         out: list[InlineFunction] = []
@@ -1026,6 +1031,8 @@ class PDB:
                 name = (ids.get(site.inlinee) if ids else None) or ""
                 if not name:
                     unnamed += 1
+                if not keep:
+                    continue
                 for segment, ranges in by_segment.items():
                     out.append(InlineFunction(
                         name=name,
@@ -1294,7 +1301,7 @@ class PDB:
                                  for k in codeview.THREAD_KINDS)
 
         inline_records = sum(kinds.get(k, 0) for k in codeview.INLINE_SITE_KINDS)
-        _listing, placed_sites, unnamed_sites = self._inline_listing()
+        _listing, placed_sites, unnamed_sites = self._inline_listing(keep=False)
         return Diagnostics(
             modules=len(self.dbi.modules),
             modules_with_symbols=with_symbols,
