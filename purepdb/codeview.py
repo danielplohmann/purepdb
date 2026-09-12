@@ -68,8 +68,10 @@ S_SECTION = 0x1136
 S_COFFGROUP = 0x1137
 S_EXPORT = 0x1138
 S_CALLSITEINFO = 0x1139
+S_COMPILE2 = 0x1116   # what S_COMPILE3 replaced: the same facts, three-part versions
 S_COMPILE3 = 0x113C
 S_ENVBLOCK = 0x113D
+COMPILE_KINDS = frozenset({S_COMPILE2, S_COMPILE3})
 S_LOCAL = 0x113E
 S_DEFRANGE = 0x113F
 S_DEFRANGE_SUBFIELD = 0x1140
@@ -120,6 +122,7 @@ KIND_NAMES: dict[int, str] = {
     S_PROCREF: "S_PROCREF",
     S_LPROCREF: "S_LPROCREF",
     S_TRAMPOLINE: "S_TRAMPOLINE",
+    S_COMPILE2: "S_COMPILE2",
     S_COMPILE3: "S_COMPILE3",
     S_ENVBLOCK: "S_ENVBLOCK",
     S_LOCAL: "S_LOCAL",
@@ -991,8 +994,33 @@ def parse_compile_info(payload: bytes) -> CompileInfo:
     )
 
 
+def parse_compile2(payload: bytes) -> CompileInfo:
+    """S_COMPILE2, the record S_COMPILE3 replaced in VS2010.
+
+    The same fields with three-part version numbers -- no QFE -- and an
+    optional block of NUL-terminated strings after the version string, which
+    is not read. A VS2008 python27.pdb carries eleven of these beside 500
+    S_COMPILE3 records (the modules the linker synthesised), and a toolchain
+    of that age writes nothing else. `cvinfo.h` calls the version string
+    length-prefixed, which is the `_ST` form; the SZ record that this kind
+    is holds a NUL-terminated one, and `link.exe` 9.00 writes it so.
+    """
+    r = Reader(payload)
+    flags = r.u32()
+    machine = r.u16()
+    frontend = (r.u16(), r.u16(), r.u16(), 0)
+    backend = (r.u16(), r.u16(), r.u16(), 0)
+    return CompileInfo(
+        language=flags & 0xFF,
+        machine=machine,
+        frontend=frontend,
+        backend=backend,
+        compiler=r.cstring(),
+    )
+
+
 def extract_compile_infos(data: bytes) -> list[CompileInfo]:
-    """Every S_COMPILE3 in one module's symbol region.
+    """Every S_COMPILE3 (or S_COMPILE2) in one module's symbol region.
 
     A module is not limited to one. An import library arrives as a single DBI
     module holding the records of every member `.obj` in it, so those modules
@@ -1000,8 +1028,13 @@ def extract_compile_infos(data: bytes) -> list[CompileInfo]:
     sqlite x64 fixture. Reporting only the first would undercount the file by
     half.
     """
-    return _decoded(parse_compile_info,
-                    (r for r in iter_records(data) if r.kind == S_COMPILE3))
+    out: list[CompileInfo] = []
+    for rec in iter_records(data):
+        if rec.kind in COMPILE_KINDS:
+            info = decode_record(rec.kind, rec.payload)
+            if info is not None:
+                out.append(info)
+    return out
 
 
 def parse_thunk(payload: bytes) -> ThunkSymbol:
@@ -1169,6 +1202,7 @@ _RECORD_PARSERS: dict[int, Callable[[int, bytes], object]] = {
     S_CONSTANT: lambda _kind, payload: parse_constant(payload),
     S_UDT: lambda _kind, payload: parse_udt(payload),
     S_COMPILE3: lambda _kind, payload: parse_compile_info(payload),
+    S_COMPILE2: lambda _kind, payload: parse_compile2(payload),
     S_SEPCODE: lambda _kind, payload: parse_sepcode(payload),
     **dict.fromkeys(INLINE_SITE_KINDS, parse_inline_site_record),
     **dict.fromkeys(PROC_KINDS, parse_proc),

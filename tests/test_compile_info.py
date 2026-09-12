@@ -183,12 +183,15 @@ def test_a_module_without_the_record_is_simply_absent():
 # --- against real linker output -----------------------------------------------
 
 # Counts and the (language, machine) split come from
-#   llvm-pdbutil dump --symbols <pdb> | grep -A1 'S_COMPILE3 \[' | grep language
+#   llvm-pdbutil dump --symbols <pdb> | grep -A1 'S_COMPILE[23] \[' | grep language
+# Four of each sqlite file's records are S_COMPILE2 -- the import-library
+# modules link.exe 14.00 still describes with the older record -- and joined
+# the count when that kind was decoded.
 GOLDEN = [
     pytest.param("sqlite/x86/sqlite3.pdb", {
         ("C", "Pentium III"): 12,
         ("C++", "Pentium III"): 12,
-        ("Link", "Intel 80386"): 83,
+        ("Link", "Intel 80386"): 87,
         ("Link", "Pentium III"): 37,
         ("MASM", "Pentium Pro"): 10,
         ("cvtres", "Intel 80386"): 1,
@@ -196,7 +199,7 @@ GOLDEN = [
     pytest.param("sqlite/x64/sqlite3.pdb", {
         ("C", "x64"): 11,
         ("C++", "x64"): 12,
-        ("Link", "x64"): 118,
+        ("Link", "x64"): 122,
         ("MASM", "x64"): 3,
         ("cvtres", "x64"): 1,
     }, id="sqlite-x64"),
@@ -233,12 +236,12 @@ def test_real_language_and_machine_split(rel, expected):
 
 @pytest.mark.parametrize("rel,expected", GOLDEN)
 def test_the_record_count_matches_the_module_walk(rel, expected):
-    """`diagnose()` counts S_COMPILE3 by walking every module stream. The two
-    disagreeing means records are being dropped between the walk and the
-    listing."""
+    """`diagnose()` counts S_COMPILE3 and S_COMPILE2 by walking every module
+    stream. The two disagreeing means records are being dropped between the
+    walk and the listing."""
     pdb = _fixture(rel)
-    assert len(pdb.compile_info()) == \
-        pdb.diagnose().module_kinds.get(codeview.S_COMPILE3, 0)
+    kinds = pdb.diagnose().module_kinds
+    assert len(pdb.compile_info()) == sum(kinds.get(k, 0) for k in codeview.COMPILE_KINDS)
     assert len(pdb.compile_info()) == sum(expected.values())
 
 
@@ -259,3 +262,31 @@ def test_a_rust_binary_says_so(rel):
     rust = [i for i in infos if i.language_name == "Rust"]
     assert rust
     assert all("rustc version" in i.compiler for i in rust)
+
+
+# --- S_COMPILE2, the older record --------------------------------------------
+
+def test_a_compile2_record_is_decoded():
+    """VS2008's linker writes S_COMPILE2, and a toolchain of that age writes
+    nothing else; the versions have no QFE, which is reported as 0."""
+    from tests._synth import compile2
+
+    records = compile2("Microsoft (R) LINK", extra_strings=("cwd", "D:\\src"))
+    infos = codeview.extract_compile_infos(records)
+    assert len(infos) == 1
+    info = infos[0]
+    assert info.language_name == "Link"
+    assert info.machine_name == "x64"
+    assert info.frontend == (0, 0, 0, 0)
+    assert info.backend == (9, 0, 30729, 0)
+    assert info.compiler == "Microsoft (R) LINK"
+
+
+def test_a_short_compile2_record_is_malformed_not_raised():
+    from tests._synth import compile2, make_record
+
+    short = make_record(codeview.S_COMPILE2, b"\x07\x00\x00\x00\xd0\x00")
+    assert codeview.extract_compile_infos(short + compile2("LINK")) == [
+        codeview.extract_compile_infos(compile2("LINK"))[0]]
+    assert codeview.count_malformed_records(short) == 1
+

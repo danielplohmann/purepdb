@@ -72,6 +72,12 @@ resolve *differently* would be breaking, and would say so here.
   counts them, `Diagnostics.has_id_table` says whether there was an IPI stream
   to look in at all, one warning covers each case, and the `diagnose`
   subcommand shows the count beside the sites.
+- `compile_info()` reads `S_COMPILE2`, the record `S_COMPILE3` replaced in
+  VS2010. The same facts with three-part version numbers, reported with a
+  QFE of 0. A python.org 2.7.18 PDB (VS2008) carries eleven beside its 500
+  `S_COMPILE3` records, and older toolchains write nothing else; `link.exe`
+  14.00 still writes it for import-library modules, so the sqlite fixtures
+  each gain four `Link` records (159 and 149).
 - `tools/fuzz.py --seed-dir DIR` mutates the PDBs under a directory of the
   caller's own instead of the fixtures. A private corpus of vendor symbol files
   reaches shapes the fixtures do not -- stripped module lists, OMAP tables,

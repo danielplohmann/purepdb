@@ -507,6 +507,22 @@ def compile3(compiler: str, *, language: int = 0x15, machine: int = 0xD0,
     return make_record(0x113C, payload)
 
 
+def compile2(compiler: str, *, language: int = 0x07, machine: int = 0xD0,
+             frontend: tuple[int, int, int] = (0, 0, 0),
+             backend: tuple[int, int, int] = (9, 0, 30729),
+             extra_strings: tuple[str, ...] = ()) -> bytes:
+    """S_COMPILE2, as `link.exe` 9.00 writes it: three-part versions, a
+    NUL-terminated version string, then an optional block of NUL-terminated
+    strings ended by a second NUL."""
+    payload = struct.pack("<IH", language, machine)
+    payload += struct.pack("<6H", *frontend, *backend)
+    payload += compiler.encode() + b"\x00"
+    for extra in extra_strings:
+        payload += extra.encode() + b"\x00"
+    payload += b"\x00"
+    return make_record(0x1116, payload)
+
+
 def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74,
             kind: int = 0x110D) -> bytes:
     """S_GDATA32, or S_LDATA32 with `kind=0x110C`: same layout either way."""
