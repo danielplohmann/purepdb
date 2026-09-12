@@ -617,8 +617,11 @@ class ThreadLocalSymbol:
         return self.kind == S_GTHREAD32
 
 
-@dataclass
+@dataclass(slots=True)
 class RawRecord:
+    """One record as the walk found it. Slotted: one is built per record the
+    caller asked for, which for `count_kinds` is every record in the file."""
+
     kind: int
     payload: bytes
     offset: int = 0  # byte offset of the record's length field within the stream

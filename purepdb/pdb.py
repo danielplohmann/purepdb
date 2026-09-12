@@ -91,9 +91,12 @@ class Function:
         return [self.name, *self.aliases]
 
 
-@dataclass
+@dataclass(slots=True)
 class Line:
-    """One source line and the address it starts at."""
+    """One source line and the address it starts at.
+
+    Slotted: there are 70k of these per 3 MB fixture, and the dict each would
+    otherwise carry is most of the cost of building one."""
 
     rva: int | None
     segment: int
@@ -1201,6 +1204,17 @@ class PDB:
         strings = self.string_table()
         if strings is None:
             return
+        # Two lookups are hoisted out of the per-entry loop, because 70k
+        # entries on a 3 MB file share a few hundred files and a handful of
+        # segments. The file name is resolved once per checksum entry rather
+        # than once per line. The address is resolved per entry only when an
+        # OMAP applies, since that translation is per address; otherwise
+        # every entry in a segment is the section's base plus its offset,
+        # and the base is looked up once. The two paths answer the same
+        # number: `to_rva` is base + offset when the map is not consulted.
+        table = self._symbol_sections
+        per_entry_rva = bool(self._omap) and table is self._original_sections
+        bases: dict[int, int | None] = {}
         for mod in self.dbi.modules:
             region = self.module_c13_bytes(mod)
             if not region:
@@ -1212,23 +1226,39 @@ class PDB:
                     files.update(c13.parse_file_checksums(sub.payload))
             if not files:
                 continue
+            names: dict[int, str | None] = {}
+            module_name = mod.module_name
             for sub in subsections:
                 if sub.kind != c13.DEBUG_S_LINES:
                     continue
                 for entry in c13.parse_lines(sub.payload):
-                    name_offset = files.get(entry.file_offset)
-                    if name_offset is None:
-                        continue
-                    file = strings.get(name_offset)
+                    file_offset = entry.file_offset
+                    if file_offset in names:
+                        file = names[file_offset]
+                    else:
+                        name_offset = files.get(file_offset)
+                        file = (strings.get(name_offset)
+                                if name_offset is not None else None)
+                        names[file_offset] = file
                     if file is None:
                         continue
+                    segment = entry.segment
+                    offset = entry.offset
+                    if per_entry_rva:
+                        rva = self._rva(segment, offset)
+                    else:
+                        if segment not in bases:
+                            bases[segment] = (table.to_rva(segment, 0)
+                                              if table is not None else None)
+                        base = bases[segment]
+                        rva = None if base is None else base + offset
                     yield Line(
-                        rva=self._rva(entry.segment, entry.offset),
-                        segment=entry.segment,
-                        offset=entry.offset,
+                        rva=rva,
+                        segment=segment,
+                        offset=offset,
                         file=file,
                         line=entry.line,
-                        module=mod.module_name,
+                        module=module_name,
                     )
 
     def diagnose(self) -> Diagnostics:
