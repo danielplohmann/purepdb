@@ -595,6 +595,19 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
 
 _INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+) "
                       r"\((?P<name>.*)\), parent")
+
+# llvm-pdbutil prints an inlinee name cut to this many characters with an
+# ellipsis after it -- `convert_special_to_empty_and_ful...` for a Rust name
+# twice that long -- and nothing else in its output is cut. Both sides are
+# shortened the same way so that a long name compares on what the tool
+# printed rather than failing on the ellipsis it added.
+_LLVM_INLINEE_NAME_WIDTH = 32
+
+
+def _shortened_like_llvm(name: str) -> str:
+    if len(name) > _LLVM_INLINEE_NAME_WIDTH:
+        return name[:_LLVM_INLINEE_NAME_WIDTH] + "..."
+    return name
 # Every annotation prints its own bytes first, and the first of those is the
 # opcode: the compressed encoding of an opcode in 1..13 is the byte itself.
 _ANNOTATION = re.compile(r"^\s+(?P<opcode>[0-9A-F]{2})[0-9A-F]*\s+"
@@ -682,7 +695,7 @@ def check_inline_sites(pdb: PDB, text: str, named: bool) -> Result:
     def site(parent: str, inlinee: int, name: str, ranges: tuple) -> tuple:
         if not named:
             return (parent, inlinee, ranges)
-        return (parent, inlinee, name, ranges)
+        return (parent, inlinee, _shortened_like_llvm(name), ranges)
 
     ours = [site(s.parent, s.inlinee, s.name, tuple(s.ranges))
             for s in pdb.inline_sites()]
