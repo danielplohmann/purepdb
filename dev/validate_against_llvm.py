@@ -202,7 +202,7 @@ def dump(tool: str, path: Path, args: Iterable[str], cache: dict) -> str:
             # against a full listing reads as purepdb inventing records, and a
             # crash that prints only its banner reads as agreement on nothing.
             # Both used to be a printed note over a zero exit status.
-            detail = proc.stderr.strip().splitlines()
+            detail = proc.stderr.strip().split("\n")
             note = (detail[0][:200] if detail
                     else f"exit status {proc.returncode}")
             for marker, why in _CANNOT_ANSWER:
@@ -284,7 +284,7 @@ def iter_records(text: str):
     """Yield one RefRecord per symbol record, with its continuation lines."""
     current: RefRecord | None = None
     module = -1
-    for line in text.splitlines():
+    for line in text.split("\n"):
         index = module_start(line)
         if index is not None:
             if current is not None:
@@ -330,7 +330,7 @@ def module_names(text: str) -> dict[int, str]:
     A module llvm could not resolve has no name to record, and is left out.
     """
     out = {}
-    for line in text.splitlines():
+    for line in text.split("\n"):
         m = _MODULE.match(line)
         if m and m.group("name") is not None:
             out[int(m.group("index"))] = m.group("name")
@@ -345,7 +345,7 @@ def modules_without_a_stream(text: str) -> set[int]:
     them. Comparing them would fail against any parser that reads the file.
     """
     out, current = set(), -1
-    for line in text.splitlines():
+    for line in text.split("\n"):
         index = module_start(line)
         if index is not None:
             current = index
@@ -545,8 +545,11 @@ _SC_ANY = re.compile(r"^\s*SC")
 
 
 def _reference_contributions(text: str) -> list[tuple[int, int, int, int]]:
+    # Split on newlines alone: `str.splitlines` also breaks on \x1c, and the
+    # Windows kernel has a section whose eight-byte name holds one
+    # (`PAGEVRFY\x1c!\x03`), which cut its row in two.
     out = []
-    for line in text.splitlines():
+    for line in text.split("\n"):
         m = _SC.match(line)
         if m:
             out.append((int(m.group("segment")), int(m.group("offset")),
@@ -637,7 +640,7 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
             raise ParseError(f"module {module}: read {seen} line entries "
                              f"where the block header said {expected}")
 
-    for raw in text.splitlines():
+    for raw in text.split("\n"):
         index = module_start(raw)
         if index is not None:
             check_block_is_complete()
@@ -700,8 +703,12 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
     return Result(ours, theirs, notes)
 
 
-_INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+) "
-                      r"\((?P<name>.*)\), parent")
+# The name is absent when the id resolves to nothing -- MSVC 14.0 x86 writes
+# `inlinee = 0x80000002` for some sites, an id the IPI has no record for, and
+# llvm prints no parenthesis at all. purepdb reports the same site with an
+# empty name, so both sides then compare on the id alone.
+_INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+)"
+                      r"(?: \((?P<name>.*)\))?, parent")
 
 # llvm-pdbutil prints an inlinee name cut to this many characters with an
 # ellipsis after it -- `convert_special_to_empty_and_ful...` for a Rust name
@@ -837,7 +844,7 @@ def check_inline_sites(pdb: PDB, text: str, named: bool) -> Result:
             # there is no address to report it at.
             continue
         theirs.append(site(proc[0], int(inlinee.group("id"), 16),
-                           inlinee.group("name"), tuple(ranges)))
+                           inlinee.group("name") or "", tuple(ranges)))
     notes = [] if named else [
         "llvm-pdbutil reports no ID stream for this file, so it resolved every "
         "inlinee id against the TPI and printed a type name; names not compared"
