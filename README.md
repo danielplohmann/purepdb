@@ -14,7 +14,7 @@ documentation. See [NOTICE](NOTICE) for provenance and prior art.
 uv pip install -e . --group dev   # pytest, ruff and ty
 ```
 
-Runtime dependencies: none. Python 3.12+.
+Runtime dependencies: none. Python 3.11+.
 
 ## Usage
 

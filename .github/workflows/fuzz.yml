@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - name: Fuzz the parse boundary
         run: python tools/fuzz.py --iterations 2000 --seed 0
       - name: Upload failing inputs
@@ -71,7 +71,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       # Raising the seed cap pulls in the two 3 MB sqlite fixtures, and an input
       # mutated from one costs around a quarter of a second: 20000 of them is
       # closer to 90 minutes than to the hour this job is allowed. The iteration

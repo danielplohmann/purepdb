@@ -30,12 +30,6 @@ resolve *differently* would be breaking, and would say so here.
 - A pull request that changes `purepdb/` or `pyproject.toml` has to add a
   `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
 
-### Removed
-
-- **Python 3.11 is no longer supported**; `requires-python` is `>=3.12`. Nothing
-  in the parser needed 3.12. The MCRIT ecosystem now shares a 3.12 floor so one
-  interpreter serves every component.
-
 ## [0.5.0] - 2026-08-28
 
 ### Added

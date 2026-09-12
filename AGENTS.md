@@ -192,12 +192,12 @@ dropped, because folded bodies genuinely have several correct names.
 
 ## Code Conventions
 
-- **Linter:** Ruff. `line-length = 100`, `target-version = "py312"`. Selected
+- **Linter:** Ruff. `line-length = 100`, `target-version = "py311"`. Selected
   rules: `E, W, F, I, UP, B, C4, SIM, PIE, RUF`.
 - **Do not run `ruff format`.** See Gotchas — this project does not use the
   formatter, and running it would rewrite 28 of 37 files.
-- **Supported Python:** 3.12+ (`requires-python = ">=3.12"`). CI tests
-  3.12–3.14 on Linux plus 3.12 on macOS and Windows.
+- **Supported Python:** 3.11+ (`requires-python = ">=3.11"`). CI tests
+  3.11–3.14 on Linux plus 3.11 on macOS and Windows.
 - **Typing:** the package is fully typed and ships `py.typed`. `ty` checks it
   strictly; `[tool.ty.rules]` is deliberately empty so any future exemption has
   to be written down with a reason rather than passed as a CI flag.
