@@ -108,6 +108,15 @@ S_LMANPROC = 0x112B
 
 MANAGED_PROC_KINDS = frozenset({S_GMANPROC, S_LMANPROC})
 
+# One-kind sets for the extractors that want a single kind, so they can hand
+# `iter_records` a filter rather than test every record themselves.
+_PUBLIC_KINDS = frozenset({S_PUB32})
+_THUNK_KINDS = frozenset({S_THUNK32})
+_LABEL_KINDS = frozenset({S_LABEL32})
+_TRAMPOLINE_KINDS = frozenset({S_TRAMPOLINE})
+_CONSTANT_KINDS = frozenset({S_CONSTANT})
+_UDT_KINDS = frozenset({S_UDT})
+
 KIND_NAMES: dict[int, str] = {
     S_END: "S_END",
     S_FRAMEPROC: "S_FRAMEPROC",
@@ -564,9 +573,7 @@ def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
     otherwise raise out of the public API.
     """
     out = []
-    for rec in iter_records(data):
-        if rec.kind not in INLINE_SITE_KINDS:
-            continue
+    for rec in iter_records(data, kinds=INLINE_SITE_KINDS):
         try:
             out.append((rec.offset, parse_inline_site(rec.payload, rec.kind)))
         except EOFError:
@@ -634,12 +641,28 @@ class Truncation:
     bytes, and callers should say so differently."""
 
 
+_RECORD_HEADER = struct.Struct("<HH")  # RecordLen, RecordKind
+assert _RECORD_HEADER.size == 4
+
+
 def iter_records(data: bytes, start: int = 0, *,
+                 kinds: frozenset[int] | None = None,
                  truncation: list[Truncation] | None = None):
     """Yield RawRecord for every length-prefixed record in `data`.
 
     Records are padded/aligned by their length field, so we trust RecordLen
     for advancing rather than re-parsing each kind.
+
+    `kinds` narrows what is *yielded*, not what is walked: every record is
+    still stepped over by its length, so the walk stays in sync and the
+    truncation report is the same whatever the filter. What it saves is a
+    payload slice and a RawRecord per record the caller would have discarded
+    on sight -- which, for an extractor after one kind, is nearly all of them.
+    This walk is the hottest loop in the parser (three quarters of the time
+    of every listing on a 3 MB file before it was written this way), which is
+    why it reads the header with one `unpack_from` rather than through a
+    `Reader`: the cursor object cost two slices, two unpacks and two bounds
+    checks per record for a header that is one struct.
 
     A malformed length ends the walk instead of raising, because a caller may
     legitimately be looking at padding rather than at records. That leaves the
@@ -647,33 +670,34 @@ def iter_records(data: bytes, start: int = 0, *,
     as `truncation` to be told: a single `Truncation` is appended to it when
     the walk stops early, and nothing is appended when the buffer is consumed.
     """
-    r = Reader(data, start)
-    while r.remaining() >= 4:
-        rec_start = r.pos
-        rec_len = r.u16()
+    unpack = _RECORD_HEADER.unpack_from
+    end = len(data)
+    pos = start
+    while end - pos >= 4:
+        rec_len, kind = unpack(data, pos)
         if rec_len < 2:
             if truncation is not None:
                 truncation.append(Truncation(
-                    rec_start,
-                    f"record length {rec_len} is below the 2-byte minimum",
+                    pos, f"record length {rec_len} is below the 2-byte minimum",
                 ))
             return
-        kind = r.u16()
         payload_len = rec_len - 2
-        if r.remaining() < payload_len:
+        body = pos + 4
+        if end - body < payload_len:
             if truncation is not None:
                 truncation.append(Truncation(
-                    rec_start,
+                    pos,
                     f"record length {rec_len} runs "
-                    f"{payload_len - r.remaining()} bytes past the end of the "
-                    f"{len(data)}-byte stream",
+                    f"{payload_len - (end - body)} bytes past the end of the "
+                    f"{end}-byte stream",
                 ))
             return
-        payload = r.bytes(payload_len)
-        yield RawRecord(kind, payload, rec_start)
-    if r.remaining() > 0 and truncation is not None:
+        if kinds is None or kind in kinds:
+            yield RawRecord(kind, data[body : body + payload_len], pos)
+        pos = body + payload_len
+    if end - pos > 0 and truncation is not None:
         truncation.append(Truncation(
-            r.pos, f"{r.remaining()} trailing bytes are too few for a record header",
+            pos, f"{end - pos} trailing bytes are too few for a record header",
             ragged_tail=True,
         ))
 
@@ -728,10 +752,12 @@ def count_malformed_records(data: bytes, kind: int | None = None) -> int:
     `kind` narrows the count to one kind, which is how a caller separates a
     record it could not parse from one it parsed and could not use.
     """
+    # Only a dispatched kind can be malformed in this sense, so the walk is
+    # asked for those alone; an undispatched record costs a header read and
+    # nothing else.
+    wanted = DISPATCHED_KINDS if kind is None else frozenset({kind})
     total = 0
-    for rec in iter_records(data):
-        if kind is not None and rec.kind != kind:
-            continue
+    for rec in iter_records(data, kinds=wanted):
         try:
             parse_record(rec.kind, rec.payload)
         except EOFError:
@@ -797,9 +823,7 @@ def extract_proc_refs(data: bytes) -> list[ProcRef]:
     See `purepdb.gsi`.
     """
     out: list[ProcRef] = []
-    for rec in iter_records(data):
-        if rec.kind not in PROC_REF_KINDS:
-            continue
+    for rec in iter_records(data, kinds=PROC_REF_KINDS):
         try:
             out.append(parse_proc_ref(rec.kind, rec.payload))
         except EOFError:
@@ -826,9 +850,7 @@ def parse_udt(payload: bytes) -> UserDefinedType:
 
 def extract_constants(data: bytes) -> list[Constant]:
     out = []
-    for rec in iter_records(data):
-        if rec.kind != S_CONSTANT:
-            continue
+    for rec in iter_records(data, kinds=_CONSTANT_KINDS):
         try:
             constant = parse_constant(rec.payload)
         except EOFError:
@@ -849,9 +871,7 @@ def count_undecoded_constants(data: bytes) -> int:
     case; no fixture in the corpus has one.
     """
     total = 0
-    for rec in iter_records(data):
-        if rec.kind != S_CONSTANT:
-            continue
+    for rec in iter_records(data, kinds=_CONSTANT_KINDS):
         try:
             if parse_constant(rec.payload) is None:
                 total += 1
@@ -862,9 +882,7 @@ def count_undecoded_constants(data: bytes) -> int:
 
 def extract_udts(data: bytes) -> list[UserDefinedType]:
     out = []
-    for rec in iter_records(data):
-        if rec.kind != S_UDT:
-            continue
+    for rec in iter_records(data, kinds=_UDT_KINDS):
         try:
             out.append(parse_udt(rec.payload))
         except EOFError:
@@ -1049,11 +1067,10 @@ def extract_compile_infos(data: bytes) -> list[CompileInfo]:
     half.
     """
     out: list[CompileInfo] = []
-    for rec in iter_records(data):
-        if rec.kind in COMPILE_KINDS:
-            info = decode_record(rec.kind, rec.payload)
-            if info is not None:
-                out.append(info)
+    for rec in iter_records(data, kinds=COMPILE_KINDS):
+        info = decode_record(rec.kind, rec.payload)
+        if info is not None:
+            out.append(info)
     return out
 
 
@@ -1109,20 +1126,17 @@ def _decoded(parse, records):
 def extract_thunks(data: bytes) -> list[ThunkSymbol]:
     """S_THUNK32 records. The scope each opens is closed by a later S_END,
     which the flat record walk steps over like any other record."""
-    return _decoded(parse_thunk,
-                    (r for r in iter_records(data) if r.kind == S_THUNK32))
+    return _decoded(parse_thunk, iter_records(data, kinds=_THUNK_KINDS))
 
 
 def extract_trampolines(data: bytes) -> list[Trampoline]:
-    return _decoded(parse_trampoline,
-                    (r for r in iter_records(data) if r.kind == S_TRAMPOLINE))
+    return _decoded(parse_trampoline, iter_records(data, kinds=_TRAMPOLINE_KINDS))
 
 
 def extract_labels(data: bytes) -> list[LabelSymbol]:
     """S_LABEL32 records. They sit inside a procedure's scope, which the flat
     record walk steps through like any other nesting."""
-    return _decoded(parse_label,
-                    (r for r in iter_records(data) if r.kind == S_LABEL32))
+    return _decoded(parse_label, iter_records(data, kinds=_LABEL_KINDS))
 
 
 def parse_data(kind: int, payload: bytes) -> DataSymbol:
@@ -1152,21 +1166,19 @@ def parse_thread_local(kind: int, payload: bytes) -> ThreadLocalSymbol:
 
 def extract_thread_locals(data: bytes) -> list[ThreadLocalSymbol]:
     out: list[ThreadLocalSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind in THREAD_KINDS:
-            sym = decode_record(rec.kind, rec.payload)
-            if sym is not None:
-                out.append(sym)
+    for rec in iter_records(data, kinds=THREAD_KINDS):
+        sym = decode_record(rec.kind, rec.payload)
+        if sym is not None:
+            out.append(sym)
     return out
 
 
 def extract_data(data: bytes) -> list[DataSymbol]:
     out: list[DataSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind in _DATA_KINDS:
-            sym = decode_record(rec.kind, rec.payload)
-            if sym is not None:
-                out.append(sym)
+    for rec in iter_records(data, kinds=_DATA_KINDS):
+        sym = decode_record(rec.kind, rec.payload)
+        if sym is not None:
+            out.append(sym)
     return out
 
 
@@ -1177,12 +1189,11 @@ def extract_publics(data: bytes) -> list[PublicSymbol]:
     and scanning it finds nothing. See `purepdb.gsi`.
     """
     out: list[PublicSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind == S_PUB32:
-            sym = decode_record(rec.kind, rec.payload)
-            if sym is not None:
-                sym.record_offset = rec.offset
-                out.append(sym)
+    for rec in iter_records(data, kinds=_PUBLIC_KINDS):
+        sym = decode_record(rec.kind, rec.payload)
+        if sym is not None:
+            sym.record_offset = rec.offset
+            out.append(sym)
     return out
 
 
@@ -1200,11 +1211,10 @@ def extract_procs(data: bytes) -> list[ProcSymbol]:
     `data` should already have the leading 4-byte CV signature stripped.
     """
     out: list[ProcSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind in PROC_KINDS:
-            proc = decode_record(rec.kind, rec.payload)
-            if proc is not None:
-                out.append(proc)
+    for rec in iter_records(data, kinds=PROC_KINDS):
+        proc = decode_record(rec.kind, rec.payload)
+        if proc is not None:
+            out.append(proc)
     return out
 
 
