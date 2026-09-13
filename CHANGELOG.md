@@ -84,6 +84,29 @@ resolve *differently* would be breaking, and would say so here.
   1024-byte blocks, publics sorted with a signed offset -- and nothing is
   written there.
 
+### Changed
+
+- The parser is several times faster on large PDBs, with no change to what
+  any listing returns: the output of every public entry point, dumped in
+  full by the new `tools/snapshot.py`, is byte-identical before and after on
+  every fixture and on a corpus of 430 vendor and toolchain PDBs. The record
+  walk reads each header with one `unpack_from` and slices a payload only
+  for the kinds the caller asked for; the named record kinds decode their
+  fixed portion as one struct; inline-site annotations are walked with an
+  integer cursor instead of a method call per byte; `diagnose()` and
+  `functions()` walk each module stream once instead of four and two times;
+  `lines()` resolves a file name once per file and a section base once per
+  segment; contiguous MSF block runs are read as one slice; and the IPI is
+  counted without building a record object per entry. All operations on the
+  3 MB sqlite x64 fixture: 1.19 s to 0.30 s; on a 20 MB python314.pdb 12.5 s
+  to 2.7 s; on the 355 MB node.pdb (see `docs/audit/perf.md`) `diagnose()`
+  from 113 s. `Line`, `LineEntry`, `RawRecord`, `InlineSite` and
+  `InlineFunction` are slotted dataclasses now -- a 355 MB PDB has 1.6
+  million inline sites and a million lines, and the per-instance dict was
+  most of the memory of listing them -- so an attribute that is not a field
+  can no longer be set on one. `tools/bench.py` is the benchmark those
+  figures come from.
+
 ### Fixed
 
 - Inline-site ranges after a `ChangeCodeLengthAndCodeOffset` annotation were
