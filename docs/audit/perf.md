@@ -106,23 +106,43 @@ The four node runs were made with other work on the box (the fixes-tree
 snapshot pass in parallel), so treat them as ±10%; the snapshot of every
 listing on node.pdb is identical between the two trees.
 
-### xul.pdb (1.93 GB, 627 modules, 11.07 M inline sites), single run, branch before the rebase
+### xul.pdb (1.93 GB, 627 modules, 11.07 M inline sites)
 
-Run alone with `snap/xul.py` (open, functions, diagnose only; the listing
-entry points would materialise eleven million objects). The coordinator's
-figure for main was `purepdb diagnose` exceeding 600 s at 3.2 GB RSS; the
-fixes branch's own `diagnose()` (which counts sites without building the
-listing) was measured by that track at 7.2 GB. The rebased branch was not
-re-run on xul in the time available.
+Listing entry points other than `functions` / `diagnose` would materialise
+eleven million objects; these runs are open + functions + diagnose only,
+in one process so RSS only rises. The coordinator's figure for `main` was
+`purepdb diagnose` exceeding 600 s at 3.2 GB RSS; the fixes branch's own
+`diagnose()` (which counts sites without building the listing) was
+measured by that track at 7.2 GB.
 
-| op | branch | peak RSS |
+Earlier single run on the perf branch *before* mmap and streaming
+(CPython 3.11.15, same 4-core Xeon / 15 GB class of box, `snap/xul.py`):
+
+| op | seconds | peak RSS |
 |---|---:|---:|
-| open | 15.3 s | 2089 MB |
-| functions (265345) | 31.4 s | 4287 MB |
-| diagnose | 152.5 s | 7047 MB |
+| open | 15.3 | 2089 MB |
+| functions (265345) | 31.4 | 4287 MB |
+| diagnose | 152.5 | 7047 MB |
 
-`open` is 1.9 GB read into `bytes` (the file itself), which is the floor
-for RSS while `PDB.open` reads rather than maps; see "not done" below.
+Same file, this branch, 2026-09-13, CPython 3.12.3, two separate
+interpreters so `ru_maxrss` is not shared. `copy=False` is `PDB.open`
+(mmap); `copy=True` is the old `f.read()`. Counts match: 627 modules,
+265345 functions, 342642 proc records, 11073218 inline sites.
+
+| op | mmap s | mmap RSS | copy s | copy RSS |
+|---|---:|---:|---:|---:|
+| open | 0.77 | 264 MB | 2.63 | 2086 MB |
+| functions | 12.45 | 3207 MB | 11.21 | 4282 MB |
+| diagnose | 71.67 | 4362 MB | 70.67 | 4925 MB |
+
+Open RSS is the mapping vs the 1.9 GB `bytes` copy. Diagnose RSS with
+streaming is the procs/chunks/histogram plus one site at a time, not
+eleven million held `InlineFunction`s: copy-mode diagnose is 2.1 GB
+below the pre-streaming 7047 MB figure, mmap another 563 MB below copy
+because the file itself is not on the heap. Wall times here are not
+compared to the 15.3 / 152.5 s table: this interpreter is 3.12, and
+page faults make mmap `functions()` a shade slower than copy on a cold
+file.
 
 ## What each commit did, and what it measured
 
@@ -166,12 +186,14 @@ In branch order (hashes after the rebase onto `audit/fixes-2026-09`):
 - **mmap in `PDB.open`.** Done: `open` maps by default, `close()` / a
   context manager own the handle, `copy=True` is the old read.
   `tools/snapshot.py --mmap` still exercises the caller-owned
-  `from_bytes` path.
+  `from_bytes` path. Measured on xul: open 264 MB mapped vs 2086 MB
+  copied.
 - **`diagnose()` memory on xul.** Done: procs and `S_SEPCODE` chunks are
   collected first, then each site is placed as it is parsed so the
-  millions of decoded sites are not held for the module. Re-measure with
-  `tools/bench.py` / `tools/snapshot.py`; the correctness gate is sha256
-  identity of snapshots.
+  millions of decoded sites are not held for the module. Measured:
+  diagnose 4362 MB mmap / 4925 MB copy, against 7047 MB on the
+  pre-streaming perf branch. Snapshot sha256 identity remains the
+  correctness gate.
 - **Section contributions as a lighter representation.** Profiled on
   ntkrnlmp (59669 entries): `DbiStream.parse` is 0.11 s of a 0.995 s run,
   and `ContributionMap` sorts once. Not worth an API-visible change.

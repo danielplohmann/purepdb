@@ -389,3 +389,26 @@ as `module_of`-bound.
 created by hand in the agent: `python3 -m venv .venv` then
 `pip install --group dev -e .`.
 
+### 2026-09-13 — corpus built, xul remeasured
+
+`tools/fetch_corpus.py --fetch --build --corrupt --omap --smoke --manifest`
+exited 0 with no `!!` lines. Root `/home/user/corpus`: 427 files / 3.0 GB
+in `MANIFEST.md` (421 PDBs + 6 PE images), 3.9 GB on disk with `_dl/`.
+Smoke opened every PDB; `xul.pdb` `functions()` 265345 in 83.8 s,
+`node` x64 75148 in 10.41 s. OMAP validator exit 0: untranslated matches
+0 of 3857 on mapped Win7 pairs. `PUREPDB_EXTRA_PDBS` unset, so still no
+FASTLINK / `_ST` / managed. rustc on the box is 1.83.0; the generator
+still labels provenance 1.94.1. `--docs` was not passed.
+
+xul open / functions / diagnose, this branch, CPython 3.12.3, separate
+processes for mmap vs `copy=True`:
+
+| op | mmap | copy |
+|---|---|---|
+| open | 0.77 s, 264 MB | 2.63 s, 2086 MB |
+| functions | 12.45 s, 3207 MB | 11.21 s, 4282 MB |
+| diagnose | 71.67 s, 4362 MB | 70.67 s, 4925 MB |
+
+Pre-streaming perf-branch diagnose on xul was 7047 MB. PRs #17 / #18 /
+#19 still OPEN, CLEAN, no reviews; cannot merge from this agent.
+
