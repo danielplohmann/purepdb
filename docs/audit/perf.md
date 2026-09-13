@@ -144,6 +144,26 @@ compared to the 15.3 / 152.5 s table: this interpreter is 3.12, and
 page faults make mmap `functions()` a shade slower than copy on a cold
 file.
 
+Same-interpreter comparison of this branch against #18 (CPython 3.11.15,
+4-core Xeon, warm page cache), `node.pdb` (354.6 MB, 1.58 M sites),
+single runs. The second walk is not a time cost: fewer live objects
+means less allocator and GC work.
+
+| op | #18 | this branch | peak RSS #18 → branch |
+|---|---:|---:|---|
+| open | 0.47 s | 0.35 s | 425 → 101 MB |
+| functions | 2.66 s | 2.80 s | 610 → 498 MB |
+| diagnose | 21.92 s | 12.06 s | 690 → 590 MB |
+| inline_sites | 20.81 s | 16.09 s | 1405 → 1306 MB |
+| **total** | **51.5 s** | **37.2 s** | |
+
+`python314.pdb`, best of 3: diagnose 0.694 → 0.727 s, inline_sites
+0.574 → 0.557 s, open peak 82 → 46 MB. Snapshot of every listing on
+432 corpus PDBs under 50 MB plus the fixtures, this branch against
+#18: 12 files differ, all six Microsoft stripped files (each stored
+twice), and in each the sole difference is the new stripped-with-procs
+warning.
+
 ## What each commit did, and what it measured
 
 In branch order (hashes after the rebase onto `audit/fixes-2026-09`):
@@ -165,9 +185,8 @@ In branch order (hashes after the rebase onto `audit/fixes-2026-09`):
    top of three counting walks; `functions()` takes procs and thunks from
    one walk. `proc_records` and `public_records` are records of the kind
    less the malformed ones of that kind, which is exactly what the
-   extractors return. After the rebase the placement is
-   `PDB._place_module_sites`, shared with `_inline_listing`, so the listing
-   and the diagnostic agree by construction. diagnose 0.193 s -> 0.082 s.
+   extractors return. After the rebase, listing and diagnose() share
+   `_place_one_site`, so they agree by construction. diagnose 0.193 s -> 0.082 s.
 6. `bade627` fixed-portion `Struct` per named record kind, name by one
    `find`. `parse_proc` x3522: 11.7 ms -> 4.5 ms.
 7. `df5b129` `_read_blocks` takes contiguous block runs as one slice.

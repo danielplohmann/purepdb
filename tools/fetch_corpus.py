@@ -113,6 +113,21 @@ def record(prov: dict, rel: str, **fields: object) -> None:
     save_json(PROVENANCE, prov)
 
 
+def rustc_id() -> str:
+    """The rustc on PATH, for provenance. Never a version we did not run."""
+    try:
+        out = subprocess.check_output(
+            [RUSTC, "--version"], text=True, timeout=10,
+            stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return "rustc"
+    # "rustc 1.83.0 (hash date)" -- first two tokens are the id.
+    parts = out.split()
+    if len(parts) >= 2 and parts[0] == "rustc":
+        return f"rustc {parts[1]}"
+    return "rustc"
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -786,7 +801,7 @@ def build_rust(prov: dict) -> None:
                 shutil.move(str(f), out / f.name)
         for f in out.glob(f"{name}*.pdb"):
             record(prov, str(f.relative_to(CORPUS)), url="self-built",
-                   toolchain=f"rustc 1.94.1 + rust-lld (lld-link flavor), {arch}, {kind}",
+                   toolchain=f"{rustc_id()} + rust-lld (lld-link flavor), {arch}, {kind}",
                    licence=OURS, redistributable=True, group="rust",
                    note=("stripped output of " if "stripped.pdb" in f.name else "")
                    + " && ".join(cmds)
@@ -1081,7 +1096,7 @@ GROUP_TITLES = {
     "xp": "Windows XP SP3 x86 symbols via archive.org (NOT redistributable)",
     "mozilla": "Mozilla symbol server (Firefox, clang-cl + lld-link, huge)",
     "clang": "self-built: clang / clang-cl 18 + lld-link 18 (freestanding)",
-    "rust": "self-built: rustc 1.94.1 + rust-lld (freestanding)",
+    "rust": "self-built: rustc + rust-lld (freestanding)",
     "corrupt": "derived corrupt variants of committed fixtures",
 }
 
@@ -1129,7 +1144,10 @@ def write_manifest(prov: dict, smoke: dict, dest: Path, local: bool) -> None:
         rels = sorted(groups.get(g, []))
         if not rels:
             continue
-        lines.append(f"## {GROUP_TITLES[g]}")
+        title = GROUP_TITLES[g]
+        if g == "rust":
+            title = f"self-built: {rustc_id()} + rust-lld (freestanding)"
+        lines.append(f"## {title}")
         lines.append("")
         gsize = sum(prov[r].get("size", 0) for r in rels)
         lines.append(f"{len(rels)} files, {human(gsize)}.")

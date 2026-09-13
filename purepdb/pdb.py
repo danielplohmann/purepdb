@@ -1147,29 +1147,6 @@ class PDB:
                 ))
         return 1, unnamed
 
-    def _place_module_sites(
-        self,
-        ids: IdTable | None,
-        procs: list[tuple[int, codeview.ProcSymbol]],
-        sites: list[tuple[int, int, codeview.InlineSite]],
-        chunks: dict[tuple[int, int], list[codeview.SepCode]],
-        out: list[InlineFunction] | None,
-    ) -> tuple[int, int]:
-        """Place a collected site list. Kept for tests that build the
-        lists themselves; the listing and diagnose() stream instead."""
-        if not sites:
-            return 0, 0
-        placed = 0
-        unnamed = 0
-        name_of = ids.get if ids else None
-        starts = [start for start, _proc in procs]
-        for site_offset, kind, site in sites:
-            n_p, n_u = self._place_one_site(
-                name_of, procs, starts, chunks, site_offset, kind, site, out)
-            placed += n_p
-            unnamed += n_u
-        return placed, unnamed
-
     def data_symbols(self) -> list[codeview.DataSymbol]:
         """Global and static data symbols (S_GDATA32/S_LDATA32), each once.
 

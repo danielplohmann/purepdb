@@ -398,7 +398,8 @@ Smoke opened every PDB; `xul.pdb` `functions()` 265345 in 83.8 s,
 `node` x64 75148 in 10.41 s. OMAP validator exit 0: untranslated matches
 0 of 3857 on mapped Win7 pairs. `PUREPDB_EXTRA_PDBS` unset, so still no
 FASTLINK / `_ST` / managed. rustc on the box is 1.83.0; the generator
-still labels provenance 1.94.1. `--docs` was not passed.
+now records `rustc --version` instead of a pinned 1.94.1. `--docs` was
+not passed.
 
 xul open / functions / diagnose, this branch, CPython 3.12.3, separate
 processes for mmap vs `copy=True`:
@@ -409,6 +410,14 @@ processes for mmap vs `copy=True`:
 | functions | 12.45 s, 3207 MB | 11.21 s, 4282 MB |
 | diagnose | 71.67 s, 4362 MB | 70.67 s, 4925 MB |
 
-Pre-streaming perf-branch diagnose on xul was 7047 MB. PRs #17 / #18 /
-#19 still OPEN, CLEAN, no reviews; cannot merge from this agent.
+Pre-streaming perf-branch diagnose on xul was 7047 MB.
+
+### 2026-09-13 — review on #19
+
+Four merge asks, all done: AGENTS.md 619; README `with PDB.open`;
+`_place_module_sites` deleted (no callers); `RecordSurvey.malformed`
+qualified for `parse=`. Also: Windows mapping note in the changelog,
+the same-interpreter node table from the review folded into
+`perf.md`, and rustc provenance from `--version`. PRs #17 / #18 still
+OPEN, CLEAN, no reviews; cannot merge from this agent.
 

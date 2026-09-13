@@ -89,6 +89,8 @@ resolve *differently* would be breaking, and would say so here.
   read-and-close behaviour. The mapping is why a 1.9 GB PDB does not have
   to occupy 1.9 GB of Python heap just to be opened: on `xul.pdb`, `open`
   peaked at 264 MB mapped versus 2086 MB with `copy=True`.
+  Until `close()`, the file stays mapped, so on Windows it cannot be
+  replaced or deleted while a `PDB` is open.
 - `diagnose()` names a stripped PDB that still has procedure records.
   Win10/11 public symbol files set the DBI stripped flag and keep procs;
   the empty-module-stream warning does not fire, so a caller had to read
