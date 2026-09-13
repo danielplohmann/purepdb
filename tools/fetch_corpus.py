@@ -40,6 +40,12 @@ Toolchain notes that matter for reading the manifest:
   so the manifest says so.
 * lld-link 18 ignores ``/pdbstripped`` ("not yet supported"), so there is no
   self-built stripped PDB; the stripped files in the corpus are Microsoft's.
+* ``/DEBUG:FASTLINK``, VS2003 ``_ST``-era, and managed PDBs cannot be
+  produced here (no MSVC, no old Visual Studio). If you have any, set
+  ``PUREPDB_EXTRA_PDBS`` to a directory of ``.pdb`` files; ``--fetch``
+  copies them into ``corpus/extra/`` so the smoke pass and validator see
+  them. S_FASTLINK (0x1167) is named in the parser but its layout is
+  untested until such a file appears.
 """
 
 from __future__ import annotations
@@ -375,10 +381,42 @@ def fetch_mozilla(prov: dict) -> None:
                group="mozilla", note=what)
 
 
+def fetch_extra_pdbs(prov: dict) -> None:
+    """Copy caller-supplied PDBs the rest of this script cannot produce.
+
+    /DEBUG:FASTLINK, VS2003 _ST, and managed PDBs need a Windows MSVC
+    toolchain this box does not have. A directory named by
+    PUREPDB_EXTRA_PDBS is copied into corpus/extra/ as-is; the smoke
+    pass then exercises whatever landed there.
+    """
+    src = os.environ.get("PUREPDB_EXTRA_PDBS")
+    if not src:
+        print("  skip: PUREPDB_EXTRA_PDBS unset "
+              "(FASTLINK / _ST / managed not produced here)")
+        return
+    root = Path(src)
+    if not root.is_dir():
+        print(f"  skip: {root} is not a directory")
+        return
+    dest_dir = CORPUS / "extra"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    found = 0
+    for path in sorted(root.rglob("*.pdb")):
+        rel = f"extra/{path.name}"
+        dest = CORPUS / rel
+        if not dest.exists() or dest.stat().st_size != path.stat().st_size:
+            shutil.copy2(path, dest)
+        record(prov, rel, url=f"PUREPDB_EXTRA_PDBS:{path}",
+               toolchain="caller-supplied (FASTLINK/_ST/managed if that is what it is)",
+               licence="as supplied; not produced here")
+        found += 1
+    print(f"  copied {found} extra PDB(s) from {root}")
+
+
 def stage_fetch(prov: dict) -> None:
     (CORPUS / "_dl").mkdir(parents=True, exist_ok=True)
     for step in (fetch_python, fetch_node, fetch_msdl, fetch_msdl_images, fetch_xp,
-                 fetch_mozilla):
+                 fetch_mozilla, fetch_extra_pdbs):
         print(f"== {step.__name__}")
         try:
             step(prov)

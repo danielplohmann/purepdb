@@ -814,22 +814,31 @@ class RecordSurvey:
 
 
 def survey_records(data: bytes, *, keep: frozenset[int] = frozenset(),
-                   truncation: list[Truncation] | None = None) -> RecordSurvey:
-    """Count every record by kind, try every dispatched parser, keep some.
+                   truncation: list[Truncation] | None = None,
+                   parse: frozenset[int] | None = None) -> RecordSurvey:
+    """Count every record by kind, try dispatched parsers, keep some.
 
     Trying the parser on every dispatched kind is what makes `malformed`
     exactly `count_malformed_records`'s answer, and it means a procedure or
     an inline site the caller wants has already been decoded by the time it
     is asked for, so `keep` costs nothing more than holding the result.
+
+    `parse` narrows which kinds are decoded. The histogram still counts
+    every record. `diagnose()` uses this to skip inline sites: they are
+    parsed on a later walk so the millions in one xul.pdb module are not
+    held next to the procs and sepcodes they need to be placed against.
     """
     survey = RecordSurvey()
     kinds = survey.kinds
     malformed = survey.malformed
     kept = survey.kept
     parsers = _RECORD_PARSERS
+    parse_kinds = DISPATCHED_KINDS if parse is None else parse
     for rec in iter_records(data, truncation=truncation):
         kind = rec.kind
         kinds[kind] += 1
+        if kind not in parse_kinds:
+            continue
         parser = parsers.get(kind)
         if parser is None:
             continue

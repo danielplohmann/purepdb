@@ -24,7 +24,7 @@ from tests._synth import (
 UNKNOWN_KIND = 0x1FFF
 
 
-def _pdb(*, module_records=b"", pub_records=(), section_stream=6):
+def _pdb(*, module_records=b"", pub_records=(), section_stream=6, flags=0):
     symrecords = b"".join(pub_records)
     module_syms = module_sym_stream(module_records)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
@@ -34,7 +34,7 @@ def _pdb(*, module_records=b"", pub_records=(), section_stream=6):
         struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
         b"",
         dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
-                   dbg_header=[0xFFFF] * 5 + [section_stream]),
+                   dbg_header=[0xFFFF] * 5 + [section_stream], flags=flags),
         publics_hash_stream(record_offsets(list(pub_records))),
         module_syms,
         section_header(".text", 0x1000),
@@ -189,3 +189,22 @@ def test_a_healthy_pdb_reports_its_linker():
                pub_records=[pub32("main", 1, 0x10)])
     assert pdb.diagnose().linker_version == (0, 0)
     assert not pdb.diagnose().private_symbols_stripped
+
+
+def test_a_stripped_pdb_that_kept_its_procs_says_so():
+    """Win10/11 public symbol files set the DBI stripped flag and still
+    carry procedure records. The empty-module-stream warning does not
+    fire, so this sentence is what a Diagnostics reader would otherwise
+    have to reconstruct from the flag."""
+    pdb = _pdb(module_records=gproc32("main", 1, 0x10),
+               pub_records=[pub32("main", 1, 0x10)],
+               flags=0x0002)
+    d = pdb.diagnose()
+    assert d.private_symbols_stripped
+    assert d.proc_records == 1
+    assert d.modules_with_symbols == 1
+    warning = "\n".join(d.warnings)
+    assert "stripped" in warning
+    assert "/PDBSTRIPPED" in warning
+    assert "procedure record" in warning
+    assert "keep procs" in warning

@@ -86,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", default=str(Path(__file__).resolve().parent.parent),
                         help="checkout whose purepdb package to import")
     parser.add_argument("--mmap", action="store_true",
-                        help="open through a memory map rather than PDB.open")
+                        help="open through a caller-owned memory map (PDB.from_bytes) "
+                             "rather than PDB.open, which maps and owns the file")
     args = parser.parse_args(argv)
 
     sys.path.insert(0, args.root)
@@ -103,7 +104,15 @@ def main(argv: list[str] | None = None) -> int:
                     f.fileno(), 0, access=mmap.ACCESS_READ) as m:
                 snap = snapshot(purepdb.PDB.from_bytes(m))
         else:
-            snap = snapshot(purepdb.PDB.open(args.path))
+            pdb = purepdb.PDB.open(args.path)
+            try:
+                snap = snapshot(pdb)
+            finally:
+                # `close` is new: an unmodified --root tree has no mapping
+                # to release, and no method.
+                closer = getattr(pdb, "close", None)
+                if closer is not None:
+                    closer()
     except purepdb.PdbError as exc:
         snap = {"error": f"{type(exc).__name__}: {exc}"}
     snap["_purepdb"] = str(Path(purepdb.__file__).resolve())

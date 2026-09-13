@@ -163,12 +163,15 @@ In branch order (hashes after the rebase onto `audit/fixes-2026-09`):
 
 ## Dead ends and things measured but not done
 
-- **mmap in `PDB.open`.** Not changed. `from_bytes` already accepts a map,
-  and the container reader is written for it; what `open` would gain is
-  RSS (xul's 1.9 GB of `bytes` is the floor today) at the cost of an open
-  file handle whose lifetime the API does not currently manage (`close()`,
-  a context manager). That is an API decision, not a perf one, and it was
-  left for the maintainer; `tools/snapshot.py --mmap` exercises the path.
+- **mmap in `PDB.open`.** Done: `open` maps by default, `close()` / a
+  context manager own the handle, `copy=True` is the old read.
+  `tools/snapshot.py --mmap` still exercises the caller-owned
+  `from_bytes` path.
+- **`diagnose()` memory on xul.** Done: procs and `S_SEPCODE` chunks are
+  collected first, then each site is placed as it is parsed so the
+  millions of decoded sites are not held for the module. Re-measure with
+  `tools/bench.py` / `tools/snapshot.py`; the correctness gate is sha256
+  identity of snapshots.
 - **Section contributions as a lighter representation.** Profiled on
   ntkrnlmp (59669 entries): `DbiStream.parse` is 0.11 s of a 0.995 s run,
   and `ContributionMap` sorts once. Not worth an API-visible change.
@@ -177,11 +180,6 @@ In branch order (hashes after the rebase onto `audit/fixes-2026-09`):
   listing that scans module streams pays one. The next step would be to
   serve several listings from one walk (a cache of decoded records per
   module), which changes memory behaviour and was not attempted.
-- **`diagnose()` memory on xul (7.0 GB).** `survey_records` keeps the decoded
-  procs and sites of one module at a time, but xul's biggest modules carry
-  millions of sites; placing sites as they stream past (a site always
-  follows its procedure) would drop that to per-procedure state. Not done
-  in the time available.
 - **`functions()` on ntkrnlmp is `module_of` bound** (30k bisects over 59k
   contributions plus `Function` construction); only 1.4x there.
 - Whole-run timings on the 3 MB fixture move by ±10% between runs; the

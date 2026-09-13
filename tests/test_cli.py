@@ -177,6 +177,7 @@ UNLISTED = {
                     "convention first",
     "open": "constructor",
     "from_bytes": "constructor",
+    "close": "releases a mapped file; not a listing",
 }
 
 
