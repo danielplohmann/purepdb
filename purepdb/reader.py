@@ -10,6 +10,11 @@ from __future__ import annotations
 import builtins
 import struct
 
+_U16 = struct.Struct("<H")
+_I16 = struct.Struct("<h")
+_U32 = struct.Struct("<I")
+_I32 = struct.Struct("<i")
+
 
 class Reader:
     __slots__ = ("data", "pos")
@@ -34,17 +39,41 @@ class Reader:
     def u8(self) -> int:
         return self._take(1)[0]
 
+    # The fixed-width reads go through `Struct.unpack_from` at the cursor
+    # rather than `_take` and `struct.unpack`: that is one bounds check and
+    # no intermediate slice per field, against two checks, a slice and a
+    # format parse. A record parser reads eight or nine of these per record,
+    # and `parse_proc` alone runs 17k times on the sqlite fixture. The end
+    # check stays explicit because `unpack_from` raises `struct.error` past
+    # the end, and EOFError is what the callers catch.
+
     def u16(self) -> int:
-        return struct.unpack("<H", self._take(2))[0]
+        pos = self.pos
+        if pos + 2 > len(self.data):
+            raise EOFError(f"read past end of buffer (need 2, have {self.remaining()})")
+        self.pos = pos + 2
+        return _U16.unpack_from(self.data, pos)[0]
 
     def i16(self) -> int:
-        return struct.unpack("<h", self._take(2))[0]
+        pos = self.pos
+        if pos + 2 > len(self.data):
+            raise EOFError(f"read past end of buffer (need 2, have {self.remaining()})")
+        self.pos = pos + 2
+        return _I16.unpack_from(self.data, pos)[0]
 
     def u32(self) -> int:
-        return struct.unpack("<I", self._take(4))[0]
+        pos = self.pos
+        if pos + 4 > len(self.data):
+            raise EOFError(f"read past end of buffer (need 4, have {self.remaining()})")
+        self.pos = pos + 4
+        return _U32.unpack_from(self.data, pos)[0]
 
     def i32(self) -> int:
-        return struct.unpack("<i", self._take(4))[0]
+        pos = self.pos
+        if pos + 4 > len(self.data):
+            raise EOFError(f"read past end of buffer (need 4, have {self.remaining()})")
+        self.pos = pos + 4
+        return _I32.unpack_from(self.data, pos)[0]
 
     def bytes(self, n: int) -> builtins.bytes:
         return self._take(n)

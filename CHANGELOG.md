@@ -86,6 +86,50 @@ resolve *differently* would be breaking, and would say so here.
   reaches shapes the fixtures do not -- stripped module lists, OMAP tables,
   1024-byte blocks, publics sorted with a signed offset -- and nothing is
   written there.
+- `PDB.open` maps the file rather than reading it into `bytes`, and the
+  returned object owns that mapping: `close()` and `with PDB.open(path)`
+  release it. `from_bytes` is unchanged. Pass `copy=True` for the previous
+  read-and-close behaviour. The mapping is why a 1.9 GB PDB does not have
+  to occupy 1.9 GB of Python heap just to be opened: on `xul.pdb`, `open`
+  peaked at 264 MB mapped versus 2086 MB with `copy=True`.
+  Until `close()`, the file stays mapped, so on Windows it cannot be
+  replaced or deleted while a `PDB` is open.
+- `diagnose()` names a stripped PDB that still has procedure records.
+  Win10/11 public symbol files set the DBI stripped flag and keep procs;
+  the empty-module-stream warning does not fire, so a caller had to read
+  `Diagnostics.private_symbols_stripped` itself. The new sentence says the
+  flag is set and that procs remain.
+
+### Changed
+
+- The parser is several times faster on large PDBs, with no change to what
+  any listing returns: the output of every public entry point, dumped in
+  full by the new `tools/snapshot.py`, is byte-identical before and after on
+  every fixture and on a corpus of 430 vendor and toolchain PDBs. The record
+  walk reads each header with one `unpack_from` and slices a payload only
+  for the kinds the caller asked for; the named record kinds decode their
+  fixed portion as one struct; inline-site annotations are walked with an
+  integer cursor instead of a method call per byte; `diagnose()` and
+  `functions()` walk each module stream once instead of four and two times;
+  `lines()` resolves a file name once per file and a section base once per
+  segment; contiguous MSF block runs are read as one slice; and the IPI is
+  counted without building a record object per entry. All operations on the
+  3 MB sqlite x64 fixture: 1.19 s to 0.30 s; on a 20 MB python314.pdb 12.5 s
+  to 2.7 s; on the 355 MB node.pdb (see `docs/audit/perf.md`) `diagnose()`
+  from 113 s. `Line`, `LineEntry`, `RawRecord`, `InlineSite` and
+  `InlineFunction` are slotted dataclasses now -- a 355 MB PDB has 1.6
+  million inline sites and a million lines, and the per-instance dict was
+  most of the memory of listing them -- so an attribute that is not a field
+  can no longer be set on one. `tools/bench.py` is the benchmark those
+  figures come from.
+- `diagnose()` and `inline_sites()` collect a module's procedures and
+  `S_SEPCODE` chunks first, then place each inline site as it is parsed
+  rather than holding every decoded site until the module ends. The
+  listing is unchanged. On a file whose largest modules carry millions of
+  sites the per-module peak is those procs and chunks, not the sites.
+  Measured on a 1.93 GB `xul.pdb` (11.07 M sites): `diagnose()` peaked at
+  4362 MB with the default map and 4925 MB with `copy=True`, against
+  7047 MB on the same file before this change.
 
 ### Fixed
 

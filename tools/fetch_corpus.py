@@ -40,6 +40,12 @@ Toolchain notes that matter for reading the manifest:
   so the manifest says so.
 * lld-link 18 ignores ``/pdbstripped`` ("not yet supported"), so there is no
   self-built stripped PDB; the stripped files in the corpus are Microsoft's.
+* ``/DEBUG:FASTLINK``, VS2003 ``_ST``-era, and managed PDBs cannot be
+  produced here (no MSVC, no old Visual Studio). If you have any, set
+  ``PUREPDB_EXTRA_PDBS`` to a directory of ``.pdb`` files; ``--fetch``
+  copies them into ``corpus/extra/`` so the smoke pass and validator see
+  them. S_FASTLINK (0x1167) is named in the parser but its layout is
+  untested until such a file appears.
 """
 
 from __future__ import annotations
@@ -105,6 +111,21 @@ def record(prov: dict, rel: str, **fields: object) -> None:
         entry["sha256"] = sha256(path)
     prov[rel] = entry
     save_json(PROVENANCE, prov)
+
+
+def rustc_id() -> str:
+    """The rustc on PATH, for provenance. Never a version we did not run."""
+    try:
+        out = subprocess.check_output(
+            [RUSTC, "--version"], text=True, timeout=10,
+            stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return "rustc"
+    # "rustc 1.83.0 (hash date)" -- first two tokens are the id.
+    parts = out.split()
+    if len(parts) >= 2 and parts[0] == "rustc":
+        return f"rustc {parts[1]}"
+    return "rustc"
 
 
 def sha256(path: Path) -> str:
@@ -375,10 +396,42 @@ def fetch_mozilla(prov: dict) -> None:
                group="mozilla", note=what)
 
 
+def fetch_extra_pdbs(prov: dict) -> None:
+    """Copy caller-supplied PDBs the rest of this script cannot produce.
+
+    /DEBUG:FASTLINK, VS2003 _ST, and managed PDBs need a Windows MSVC
+    toolchain this box does not have. A directory named by
+    PUREPDB_EXTRA_PDBS is copied into corpus/extra/ as-is; the smoke
+    pass then exercises whatever landed there.
+    """
+    src = os.environ.get("PUREPDB_EXTRA_PDBS")
+    if not src:
+        print("  skip: PUREPDB_EXTRA_PDBS unset "
+              "(FASTLINK / _ST / managed not produced here)")
+        return
+    root = Path(src)
+    if not root.is_dir():
+        print(f"  skip: {root} is not a directory")
+        return
+    dest_dir = CORPUS / "extra"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    found = 0
+    for path in sorted(root.rglob("*.pdb")):
+        rel = f"extra/{path.name}"
+        dest = CORPUS / rel
+        if not dest.exists() or dest.stat().st_size != path.stat().st_size:
+            shutil.copy2(path, dest)
+        record(prov, rel, url=f"PUREPDB_EXTRA_PDBS:{path}",
+               toolchain="caller-supplied (FASTLINK/_ST/managed if that is what it is)",
+               licence="as supplied; not produced here")
+        found += 1
+    print(f"  copied {found} extra PDB(s) from {root}")
+
+
 def stage_fetch(prov: dict) -> None:
     (CORPUS / "_dl").mkdir(parents=True, exist_ok=True)
     for step in (fetch_python, fetch_node, fetch_msdl, fetch_msdl_images, fetch_xp,
-                 fetch_mozilla):
+                 fetch_mozilla, fetch_extra_pdbs):
         print(f"== {step.__name__}")
         try:
             step(prov)
@@ -748,7 +801,7 @@ def build_rust(prov: dict) -> None:
                 shutil.move(str(f), out / f.name)
         for f in out.glob(f"{name}*.pdb"):
             record(prov, str(f.relative_to(CORPUS)), url="self-built",
-                   toolchain=f"rustc 1.94.1 + rust-lld (lld-link flavor), {arch}, {kind}",
+                   toolchain=f"{rustc_id()} + rust-lld (lld-link flavor), {arch}, {kind}",
                    licence=OURS, redistributable=True, group="rust",
                    note=("stripped output of " if "stripped.pdb" in f.name else "")
                    + " && ".join(cmds)
@@ -1043,7 +1096,7 @@ GROUP_TITLES = {
     "xp": "Windows XP SP3 x86 symbols via archive.org (NOT redistributable)",
     "mozilla": "Mozilla symbol server (Firefox, clang-cl + lld-link, huge)",
     "clang": "self-built: clang / clang-cl 18 + lld-link 18 (freestanding)",
-    "rust": "self-built: rustc 1.94.1 + rust-lld (freestanding)",
+    "rust": "self-built: rustc + rust-lld (freestanding)",
     "corrupt": "derived corrupt variants of committed fixtures",
 }
 
@@ -1091,7 +1144,10 @@ def write_manifest(prov: dict, smoke: dict, dest: Path, local: bool) -> None:
         rels = sorted(groups.get(g, []))
         if not rels:
             continue
-        lines.append(f"## {GROUP_TITLES[g]}")
+        title = GROUP_TITLES[g]
+        if g == "rust":
+            title = f"self-built: {rustc_id()} + rust-lld (freestanding)"
+        lines.append(f"## {title}")
         lines.append("")
         gsize = sum(prov[r].get("size", 0) for r in rels)
         lines.append(f"{len(rels)} files, {human(gsize)}.")

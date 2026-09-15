@@ -92,6 +92,7 @@ def exercise(data: bytes) -> list:
         # ended the sweep before the other entry points ran.
         pdb.info(),
     ]
+    pdb.close()
     return seen
 
 

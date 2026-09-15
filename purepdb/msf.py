@@ -24,9 +24,11 @@ published PDB sources. This is an independent implementation; see NOTICE.
 
 from __future__ import annotations
 
+import contextlib
 import mmap
 import struct
 from dataclasses import dataclass
+from typing import BinaryIO, Self
 
 # What this reader needs from the bytes it is handed: a length, slicing, and
 # the buffer protocol `struct.unpack_from` reads through. `bytes` is the usual
@@ -164,24 +166,63 @@ class MsfFile:
         # stream_blocks[i] is the ordered list of block indices for stream i.
         self.stream_sizes: list[int | None] = []
         self.stream_blocks: list[list[int]] = []
+        # Set by `open` when this object mapped the file rather than
+        # borrowing a buffer. `from_bytes` / `MsfFile(data)` leave them
+        # None: the caller owns that buffer and closing must not touch it.
+        self._owned_map: mmap.mmap | None = None
+        self._owned_file: BinaryIO | None = None
+        self._closed = False
         self._read_directory()
 
     # -- block-level helpers ------------------------------------------------
 
     def _read_block(self, index: int) -> bytes:
+        """One block. Kept for the callers that read a stream a block at a
+        time; the stream reads below take whole runs instead."""
+        return self._read_blocks([index], self.super.block_size)
+
+    def _read_blocks(self, indices: list[int], size: int) -> bytes:
+        """The concatenation of `indices`' blocks, cut to `size` bytes.
+
+        Streams are mostly written in contiguous runs of blocks -- the 748
+        blocks of the sqlite x64 fixture form 94 runs, and a 355 MB node.pdb
+        holds its 86k blocks in a few thousand -- so each run is taken as one
+        slice instead of one slice per block, and a stream that is a single
+        run is one slice with no join at all. The bounds check is per run,
+        which is the same check as before: a run past the end has a block
+        past the end.
+        """
+        if not indices:
+            return b""
         bs = self.super.block_size
-        start = index * bs
-        end = start + bs
-        if end > len(self._data):
-            raise MsfError(f"block {index} out of range")
+        data = self._data
+        limit = len(data)
+        runs: list[bytes] = []
+        run_start = indices[0]
+        expect = run_start + 1
+        for index in indices[1:]:
+            if index != expect:
+                self._append_run(runs, run_start, expect - run_start, bs, limit)
+                run_start = index
+                expect = index
+            expect += 1
+        self._append_run(runs, run_start, expect - run_start, bs, limit)
+        buf = runs[0] if len(runs) == 1 else b"".join(runs)
+        return buf[:size] if len(buf) > size else buf
+
+    def _append_run(self, runs: list[bytes], first: int, count: int,
+                    bs: int, limit: int) -> None:
+        start = first * bs
+        end = start + count * bs
+        if end > limit:
+            # Named by the first block that does not fit, as the per-block
+            # read named it.
+            bad = first + max(0, (limit - start) // bs)
+            raise MsfError(f"block {bad} out of range")
         # `bytes(...)` costs nothing on the two cases that already return it
         # -- slicing `bytes` or an mmap -- and is what keeps a memoryview from
         # handing its own slices out through a public `-> bytes`.
-        return bytes(self._data[start:end])
-
-    def _read_blocks(self, indices: list[int], size: int) -> bytes:
-        buf = b"".join(self._read_block(i) for i in indices)
-        return buf[:size]
+        runs.append(bytes(self._data[start:end]))
 
     # -- directory ----------------------------------------------------------
 
@@ -282,6 +323,8 @@ class MsfFile:
 
     def read_stream(self, index: int) -> bytes:
         """Return the full decoded contents of stream `index`."""
+        if self._closed:
+            raise MsfError("this MSF has been closed")
         if not (0 <= index < self.num_streams):
             raise MsfError(f"stream index {index} out of range (have {self.num_streams})")
         size = self.stream_sizes[index]
@@ -290,6 +333,78 @@ class MsfFile:
         return self._read_blocks(self.stream_blocks[index], size)
 
     @classmethod
-    def open(cls, path: str) -> MsfFile:
-        with open(path, "rb") as f:
-            return cls(f.read())
+    def open(cls, path: str, *, copy: bool = False) -> MsfFile:
+        """Open an MSF file from a path.
+
+        By default the file is memory-mapped, not copied into `bytes`. A
+        mapping keeps the file open for the lifetime of the returned
+        object -- call `close()` or use it as a context manager when that
+        has to end. That is the point of `open` versus `from_bytes`: the
+        1.9 GB of a xul.pdb does not need to sit in the process as a
+        Python `bytes` just so the directory and a handful of streams
+        can be read.
+
+        Pass `copy=True` for the previous behaviour: read the whole file
+        and release the handle immediately. A caller who will discard the
+        path, or who cannot keep a mapping alive, still wants that.
+        """
+        if copy:
+            with open(path, "rb") as f:
+                return cls(f.read())
+        fh = open(path, "rb")  # noqa: SIM115 -- kept open for the mapping's life
+        try:
+            # Length 0 is a real file and a real refusal -- mmap will not
+            # map it -- so it becomes an empty buffer rather than a
+            # traceback. Anything else mmap rejects is an `MsfError`.
+            mapped = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        except (ValueError, OSError) as exc:
+            try:
+                fh.seek(0, 2)
+                empty = fh.tell() == 0
+            except OSError:
+                empty = False
+            fh.close()
+            if empty:
+                return cls(b"")
+            raise MsfError(f"cannot map {path}: {exc}") from exc
+        try:
+            msf = cls(mapped)
+        except BaseException:
+            mapped.close()
+            fh.close()
+            raise
+        msf._owned_map = mapped
+        msf._owned_file = fh
+        return msf
+
+    def close(self) -> None:
+        """Release a file this object mapped. A no-op if it did not.
+
+        After a mapped `open`, `read_stream` raises `MsfError`. Safe to
+        call twice. `MsfFile(data)` and `open(..., copy=True)` do not
+        own a mapping, so closing them does not invalidate the buffer.
+        """
+        mapped = self._owned_map
+        fh = self._owned_file
+        if mapped is None and fh is None:
+            return
+        self._closed = True
+        self._owned_map = None
+        self._owned_file = None
+        # Drop the view before closing the map: a live slice of a closed
+        # mmap is a BufferError, which is not a `PdbError`.
+        self._data = b""
+        if mapped is not None:
+            mapped.close()
+        if fh is not None:
+            fh.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()

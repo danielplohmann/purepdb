@@ -461,7 +461,9 @@ def test_inline_site_in_stream_without_c13_signature():
     mods = module_info("main.obj", "main.obj", sym_stream=5, sym_byte_size=len(damaged))
     streams[3] = dbi_stream(public_stream=6, symrecord_stream=7, module_list=mods,
                             dbg_header=[0xFFFF] * 5 + [8])
-    assert [s.parent for s in PDB.from_bytes(build_msf(streams)).inline_sites()] == ["outer"]
+    pdb = PDB.from_bytes(build_msf(streams))
+    assert [s.parent for s in pdb.inline_sites()] == ["outer"]
+    assert pdb.diagnose().unplaced_inline_sites == 0
 
 
 # --- the fused opcode, and separated code ------------------------------------
