@@ -125,8 +125,13 @@ GitHub release. Rehearse the first release after any change to the workflow.
 Done once, by a repository owner; the workflow cannot create these for itself.
 
 - **PyPI trusted publisher** for the `purepdb` project: owner `danielplohmann`, repository `purepdb`,
-  workflow `publish-release.yml`, environment `pypi`. Add the same publisher on TestPyPI with
-  environment `testpypi` to enable rehearsals.
+  workflow `publish-release.yml`, environment `pypi`. The project already exists on PyPI, so this is
+  added under its own Publishing settings.
+- **TestPyPI trusted publisher**, the same four values with environment `testpypi`, to enable
+  rehearsals. `purepdb` does not exist on TestPyPI, so this one is added as a *pending* publisher
+  (Your projects → Publishing → add a pending publisher), which names a project that is not there
+  yet; the first rehearsal that uploads creates the project and turns it into an ordinary publisher.
+  A rehearsal is the only thing that publishes to TestPyPI — pushing a tag always goes to PyPI.
 - **GitHub environments** `pypi` and `testpypi` (Settings → Environments). Restricting `pypi` to
   the `v*` tag pattern and requiring a reviewer is recommended: it makes the publish step a
   deliberate click even if a tag is pushed by mistake.
