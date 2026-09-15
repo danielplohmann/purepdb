@@ -212,3 +212,40 @@ def test_streams_claiming_more_than_the_file_holds_are_rejected():
         f"<{n_dir_blocks}I", *dir_blocks)
     with pytest.raises(MsfError, match=r"claims .* bytes of streams"):
         MsfFile(bytes(buf))
+
+
+def test_open_maps_the_file_and_close_releases_it(tmp_path):
+    """`open` is the path that used to copy the whole file into `bytes`.
+    Mapping keeps the handle for the object's lifetime, so close() is part
+    of the API rather than an afterthought."""
+    payload = bytes(range(256)) * 10
+    path = tmp_path / "mapped.pdb"
+    path.write_bytes(build_msf([b"", payload], block_size=512))
+
+    msf = MsfFile.open(str(path))
+    assert msf.read_stream(1) == payload
+    msf.close()
+    with pytest.raises(MsfError, match="closed"):
+        msf.read_stream(1)
+    msf.close()  # idempotent
+
+
+def test_open_copy_does_not_need_close(tmp_path):
+    payload = b"hello world"
+    path = tmp_path / "copied.pdb"
+    path.write_bytes(build_msf([payload]))
+
+    msf = MsfFile.open(str(path), copy=True)
+    msf.close()
+    assert msf.read_stream(0) == payload
+
+
+def test_open_as_a_context_manager(tmp_path):
+    payload = b"hello world"
+    path = tmp_path / "ctx.pdb"
+    path.write_bytes(build_msf([payload]))
+
+    with MsfFile.open(str(path)) as msf:
+        assert msf.read_stream(0) == payload
+    with pytest.raises(MsfError, match="closed"):
+        msf.read_stream(0)

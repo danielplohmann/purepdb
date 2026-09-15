@@ -367,6 +367,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     handler, noun, _columns = entry
+    pdb: PDB | None = None
     try:
         pdb = PDB.open(path)
         count = handler(pdb)
@@ -393,6 +394,9 @@ def main(argv: list[str]) -> int:
     except OSError as exc:
         _eprint(f"error: {_text(str(exc))}")
         return 1
+    finally:
+        if pdb is not None:
+            pdb.close()
     return 0
 
 

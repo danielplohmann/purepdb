@@ -24,9 +24,11 @@ published PDB sources. This is an independent implementation; see NOTICE.
 
 from __future__ import annotations
 
+import contextlib
 import mmap
 import struct
 from dataclasses import dataclass
+from typing import BinaryIO, Self
 
 # What this reader needs from the bytes it is handed: a length, slicing, and
 # the buffer protocol `struct.unpack_from` reads through. `bytes` is the usual
@@ -164,6 +166,12 @@ class MsfFile:
         # stream_blocks[i] is the ordered list of block indices for stream i.
         self.stream_sizes: list[int | None] = []
         self.stream_blocks: list[list[int]] = []
+        # Set by `open` when this object mapped the file rather than
+        # borrowing a buffer. `from_bytes` / `MsfFile(data)` leave them
+        # None: the caller owns that buffer and closing must not touch it.
+        self._owned_map: mmap.mmap | None = None
+        self._owned_file: BinaryIO | None = None
+        self._closed = False
         self._read_directory()
 
     # -- block-level helpers ------------------------------------------------
@@ -315,6 +323,8 @@ class MsfFile:
 
     def read_stream(self, index: int) -> bytes:
         """Return the full decoded contents of stream `index`."""
+        if self._closed:
+            raise MsfError("this MSF has been closed")
         if not (0 <= index < self.num_streams):
             raise MsfError(f"stream index {index} out of range (have {self.num_streams})")
         size = self.stream_sizes[index]
@@ -323,6 +333,78 @@ class MsfFile:
         return self._read_blocks(self.stream_blocks[index], size)
 
     @classmethod
-    def open(cls, path: str) -> MsfFile:
-        with open(path, "rb") as f:
-            return cls(f.read())
+    def open(cls, path: str, *, copy: bool = False) -> MsfFile:
+        """Open an MSF file from a path.
+
+        By default the file is memory-mapped, not copied into `bytes`. A
+        mapping keeps the file open for the lifetime of the returned
+        object -- call `close()` or use it as a context manager when that
+        has to end. That is the point of `open` versus `from_bytes`: the
+        1.9 GB of a xul.pdb does not need to sit in the process as a
+        Python `bytes` just so the directory and a handful of streams
+        can be read.
+
+        Pass `copy=True` for the previous behaviour: read the whole file
+        and release the handle immediately. A caller who will discard the
+        path, or who cannot keep a mapping alive, still wants that.
+        """
+        if copy:
+            with open(path, "rb") as f:
+                return cls(f.read())
+        fh = open(path, "rb")  # noqa: SIM115 -- kept open for the mapping's life
+        try:
+            # Length 0 is a real file and a real refusal -- mmap will not
+            # map it -- so it becomes an empty buffer rather than a
+            # traceback. Anything else mmap rejects is an `MsfError`.
+            mapped = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        except (ValueError, OSError) as exc:
+            try:
+                fh.seek(0, 2)
+                empty = fh.tell() == 0
+            except OSError:
+                empty = False
+            fh.close()
+            if empty:
+                return cls(b"")
+            raise MsfError(f"cannot map {path}: {exc}") from exc
+        try:
+            msf = cls(mapped)
+        except BaseException:
+            mapped.close()
+            fh.close()
+            raise
+        msf._owned_map = mapped
+        msf._owned_file = fh
+        return msf
+
+    def close(self) -> None:
+        """Release a file this object mapped. A no-op if it did not.
+
+        After a mapped `open`, `read_stream` raises `MsfError`. Safe to
+        call twice. `MsfFile(data)` and `open(..., copy=True)` do not
+        own a mapping, so closing them does not invalidate the buffer.
+        """
+        mapped = self._owned_map
+        fh = self._owned_file
+        if mapped is None and fh is None:
+            return
+        self._closed = True
+        self._owned_map = None
+        self._owned_file = None
+        # Drop the view before closing the map: a live slice of a closed
+        # mmap is a BufferError, which is not a `PdbError`.
+        self._data = b""
+        if mapped is not None:
+            mapped.close()
+        if fh is not None:
+            fh.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()

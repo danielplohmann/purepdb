@@ -83,6 +83,19 @@ resolve *differently* would be breaking, and would say so here.
   reaches shapes the fixtures do not -- stripped module lists, OMAP tables,
   1024-byte blocks, publics sorted with a signed offset -- and nothing is
   written there.
+- `PDB.open` maps the file rather than reading it into `bytes`, and the
+  returned object owns that mapping: `close()` and `with PDB.open(path)`
+  release it. `from_bytes` is unchanged. Pass `copy=True` for the previous
+  read-and-close behaviour. The mapping is why a 1.9 GB PDB does not have
+  to occupy 1.9 GB of Python heap just to be opened: on `xul.pdb`, `open`
+  peaked at 264 MB mapped versus 2086 MB with `copy=True`.
+  Until `close()`, the file stays mapped, so on Windows it cannot be
+  replaced or deleted while a `PDB` is open.
+- `diagnose()` names a stripped PDB that still has procedure records.
+  Win10/11 public symbol files set the DBI stripped flag and keep procs;
+  the empty-module-stream warning does not fire, so a caller had to read
+  `Diagnostics.private_symbols_stripped` itself. The new sentence says the
+  flag is set and that procs remain.
 
 ### Changed
 
@@ -106,6 +119,14 @@ resolve *differently* would be breaking, and would say so here.
   most of the memory of listing them -- so an attribute that is not a field
   can no longer be set on one. `tools/bench.py` is the benchmark those
   figures come from.
+- `diagnose()` and `inline_sites()` collect a module's procedures and
+  `S_SEPCODE` chunks first, then place each inline site as it is parsed
+  rather than holding every decoded site until the module ends. The
+  listing is unchanged. On a file whose largest modules carry millions of
+  sites the per-module peak is those procs and chunks, not the sites.
+  Measured on a 1.93 GB `xul.pdb` (11.07 M sites): `diagnose()` peaked at
+  4362 MB with the default map and 4925 MB with `copy=True`, against
+  7047 MB on the same file before this change.
 
 ### Fixed
 

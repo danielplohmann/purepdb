@@ -803,9 +803,13 @@ class RecordSurvey:
 
     kinds: collections.Counter[int] = field(default_factory=collections.Counter)
     malformed: collections.Counter[int] = field(default_factory=collections.Counter)
-    """Per kind: records shorter than the kind requires. Its total is what
-    `count_malformed_records` answers, and its entry for a kind is what the
-    same function narrowed to that kind answers."""
+    """Per kind: records shorter than the kind requires, among the kinds
+    this walk decoded. When `survey_records` is called without `parse=`,
+    that is every dispatched kind, the total is what
+    `count_malformed_records` answers, and the entry for a kind is what
+    the same function narrowed to that kind answers. A `parse=` subset
+    only counts those kinds; `diagnose()` adds the inline-site count
+    from the second walk that places them."""
     kept: list[tuple[int, int, object]] = field(default_factory=list)
     """`(offset, kind, decoded)` for the kinds the caller asked to keep, in
     stream order. Only records that decoded are here; a short one is in
@@ -814,22 +818,34 @@ class RecordSurvey:
 
 
 def survey_records(data: bytes, *, keep: frozenset[int] = frozenset(),
-                   truncation: list[Truncation] | None = None) -> RecordSurvey:
-    """Count every record by kind, try every dispatched parser, keep some.
+                   truncation: list[Truncation] | None = None,
+                   parse: frozenset[int] | None = None) -> RecordSurvey:
+    """Count every record by kind, try dispatched parsers, keep some.
 
-    Trying the parser on every dispatched kind is what makes `malformed`
-    exactly `count_malformed_records`'s answer, and it means a procedure or
-    an inline site the caller wants has already been decoded by the time it
-    is asked for, so `keep` costs nothing more than holding the result.
+    When `parse` is omitted, every dispatched kind is tried, which is
+    what makes `malformed` exactly `count_malformed_records`'s answer,
+    and it means a procedure or an inline site the caller wants has
+    already been decoded by the time it is asked for, so `keep` costs
+    nothing more than holding the result.
+
+    `parse` narrows which kinds are decoded (and therefore which can be
+    counted malformed). The histogram still counts every record.
+    `diagnose()` uses this to skip inline sites: they are parsed on a
+    later walk so the millions in one xul.pdb module are not held next
+    to the procs and sepcodes they need to be placed against, and that
+    walk's malformed count is added to the survey's.
     """
     survey = RecordSurvey()
     kinds = survey.kinds
     malformed = survey.malformed
     kept = survey.kept
     parsers = _RECORD_PARSERS
+    parse_kinds = DISPATCHED_KINDS if parse is None else parse
     for rec in iter_records(data, truncation=truncation):
         kind = rec.kind
         kinds[kind] += 1
+        if kind not in parse_kinds:
+            continue
         parser = parsers.get(kind)
         if parser is None:
             continue

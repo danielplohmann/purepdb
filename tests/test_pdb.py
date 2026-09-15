@@ -1,5 +1,7 @@
 import struct
 
+import pytest
+
 from purepdb import PDB
 from purepdb.dbi import DbiStream
 from purepdb.sections import SectionTable
@@ -155,3 +157,22 @@ def test_dpc_procedures_are_procedures():
     assert [(f.name, f.rva, f.source) for f in pdb.functions()] == [
         ("plain", 0x1010, "proc"), ("dpc", 0x1040, "proc"), ("dpc_id", 0x1080, "proc")]
     assert pdb.diagnose().proc_records == 3
+
+
+def test_open_maps_and_close_is_part_of_the_api(tmp_path):
+    """`PDB.open` owns a mapping; listings after close must not leak
+    BufferError past the PdbError boundary."""
+    from purepdb import MsfError
+
+    path = tmp_path / "app.pdb"
+    path.write_bytes(_build_full_pdb())
+
+    with PDB.open(str(path)) as pdb:
+        names = {f.name for f in pdb.functions()}
+        assert "main" in names
+    with pytest.raises(MsfError, match="closed"):
+        pdb.functions()
+
+    copied = PDB.open(str(path), copy=True)
+    copied.close()
+    assert "main" in {f.name for f in copied.functions()}
