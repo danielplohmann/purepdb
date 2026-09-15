@@ -31,6 +31,8 @@ S_LPROC32 = 0x110F     # local (static) procedure start
 S_GPROC32 = 0x1110     # global procedure start
 S_LPROC32_ID = 0x1146  # same layout, type index is an ID
 S_GPROC32_ID = 0x1147
+S_LPROC32_DPC = 0x1155     # same layout again: a procedure compiled for a DPC
+S_LPROC32_DPC_ID = 0x1156  # (C++ AMP) target, which cvinfo.h lists as PROCSYM32
 S_END = 0x0006
 S_PROC_ID_END = 0x114F
 
@@ -43,7 +45,8 @@ S_GTHREAD32 = 0x1113   # ... and external linkage
 S_PROCREF = 0x1125     # globals index entry for a global procedure
 S_LPROCREF = 0x1127    # ... and for a static one
 
-PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID})
+PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID,
+                        S_LPROC32_DPC, S_LPROC32_DPC_ID})
 _DATA_KINDS = frozenset({S_LDATA32, S_GDATA32})
 THREAD_KINDS = frozenset({S_LTHREAD32, S_GTHREAD32})
 PROC_REF_KINDS = frozenset({S_PROCREF, S_LPROCREF})
@@ -60,13 +63,40 @@ S_BPREL32 = 0x110B
 S_REGREL32 = 0x1111
 S_TRAMPOLINE = 0x112C
 S_FRAMEPROC = 0x1012
+S_ANNOTATION = 0x1019
+S_SECTION = 0x1136
+S_COFFGROUP = 0x1137
 S_EXPORT = 0x1138
 S_CALLSITEINFO = 0x1139
+S_COMPILE2 = 0x1116   # what S_COMPILE3 replaced: the same facts, three-part versions
 S_COMPILE3 = 0x113C
 S_ENVBLOCK = 0x113D
+COMPILE_KINDS = frozenset({S_COMPILE2, S_COMPILE3})
 S_LOCAL = 0x113E
+S_DEFRANGE = 0x113F
+S_DEFRANGE_SUBFIELD = 0x1140
+S_DEFRANGE_REGISTER = 0x1141
+S_DEFRANGE_FRAMEPOINTER_REL = 0x1142
+S_DEFRANGE_SUBFIELD_REGISTER = 0x1143
+S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE = 0x1144
+S_DEFRANGE_REGISTER_REL = 0x1145
+S_BUILDINFO = 0x114C
+S_REGISTER = 0x1106
+S_UNAMESPACE = 0x1124
+S_FRAMECOOKIE = 0x113A
+S_FILESTATIC = 0x1153
+S_ARMSWITCHTABLE = 0x1159
+S_CALLEES = 0x115A
+S_CALLERS = 0x115B
+S_POGODATA = 0x115C
+S_HEAPALLOCSITE = 0x115E
+S_FASTLINK = 0x1167
 S_INLINESITE = 0x114D
 S_INLINESITE_END = 0x114E
+S_INLINESITE2 = 0x115D  # S_INLINESITE plus an invocation count before the annotations
+S_SEPCODE = 0x1132      # a code range split off from its procedure (hot/cold)
+S_INLINEES = 0x1168
+INLINE_SITE_KINDS = frozenset({S_INLINESITE, S_INLINESITE2})
 
 # Managed (.NET) code. A Windows-format PDB for a managed assembly describes
 # methods with these instead of S_*PROC32, keyed by metadata token rather than
@@ -102,12 +132,39 @@ KIND_NAMES: dict[int, str] = {
     S_PROCREF: "S_PROCREF",
     S_LPROCREF: "S_LPROCREF",
     S_TRAMPOLINE: "S_TRAMPOLINE",
+    S_COMPILE2: "S_COMPILE2",
     S_COMPILE3: "S_COMPILE3",
     S_ENVBLOCK: "S_ENVBLOCK",
     S_LOCAL: "S_LOCAL",
+    S_ANNOTATION: "S_ANNOTATION",
+    S_SECTION: "S_SECTION",
+    S_COFFGROUP: "S_COFFGROUP",
+    S_DEFRANGE: "S_DEFRANGE",
+    S_DEFRANGE_SUBFIELD: "S_DEFRANGE_SUBFIELD",
+    S_DEFRANGE_REGISTER: "S_DEFRANGE_REGISTER",
+    S_DEFRANGE_FRAMEPOINTER_REL: "S_DEFRANGE_FRAMEPOINTER_REL",
+    S_DEFRANGE_SUBFIELD_REGISTER: "S_DEFRANGE_SUBFIELD_REGISTER",
+    S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE: "S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE",
+    S_DEFRANGE_REGISTER_REL: "S_DEFRANGE_REGISTER_REL",
+    S_BUILDINFO: "S_BUILDINFO",
+    S_REGISTER: "S_REGISTER",
+    S_UNAMESPACE: "S_UNAMESPACE",
+    S_FRAMECOOKIE: "S_FRAMECOOKIE",
+    S_FILESTATIC: "S_FILESTATIC",
+    S_ARMSWITCHTABLE: "S_ARMSWITCHTABLE",
+    S_CALLEES: "S_CALLEES",
+    S_CALLERS: "S_CALLERS",
+    S_POGODATA: "S_POGODATA",
+    S_HEAPALLOCSITE: "S_HEAPALLOCSITE",
+    S_FASTLINK: "S_FASTLINK",
+    S_INLINEES: "S_INLINEES",
     S_INLINESITE: "S_INLINESITE",
+    S_INLINESITE2: "S_INLINESITE2",
+    S_SEPCODE: "S_SEPCODE",
     S_LPROC32_ID: "S_LPROC32_ID",
     S_GPROC32_ID: "S_GPROC32_ID",
+    S_LPROC32_DPC: "S_LPROC32_DPC",
+    S_LPROC32_DPC_ID: "S_LPROC32_DPC_ID",
     S_PROC_ID_END: "S_PROC_ID_END",
     S_MANSLOT: "S_MANSLOT",
     S_GMANPROC: "S_GMANPROC",
@@ -346,30 +403,94 @@ class InlineSite:
     enclosing procedure*, because that is how the annotations express them.
     `inlinee` is an item id into the IPI stream, not a name; `purepdb.ipi`
     turns it into one.
+
+    `separated_ranges` are `(chunk, offset, length)` triples for code the
+    annotations place in one of the procedure's separated code chunks -- the
+    cold half of a hot/cold split, which MSVC's profile-guided optimiser
+    writes as an `S_SEPCODE` record after the procedure's scope. `chunk` is
+    1-based in the order those records appear; the offset is relative to that
+    chunk's start, not the procedure's. Resolving one needs the module's
+    `S_SEPCODE` records, so the two lists are kept apart.
     """
 
     inlinee: int
     ranges: list[tuple[int, int]] = field(default_factory=list)
+    separated_ranges: list[tuple[int, int, int]] = field(default_factory=list)
 
     @property
     def code_size(self) -> int:
-        return sum(length for _offset, length in self.ranges)
+        return (sum(length for _offset, length in self.ranges)
+                + sum(length for _chunk, _offset, length in self.separated_ranges))
 
 
-def parse_inline_site(payload: bytes) -> InlineSite:
+@dataclass
+class SepCode:
+    """S_SEPCODE: a range of a procedure's code moved away from its body.
+
+    Profile-guided optimisation splits a function into a hot part, which
+    stays where the procedure record says, and a cold part, which the linker
+    lays out elsewhere. This names the cold part: its own `segment:offset`
+    and `length`, and the `segment:offset` of the procedure it belongs to.
+    The record sits after the procedure's `S_END` rather than inside its
+    scope, so the parent address is the link.
+    """
+
+    segment: int
+    offset: int
+    length: int
+    flags: int
+    parent_segment: int
+    parent_offset: int
+
+
+def parse_sepcode(payload: bytes) -> SepCode:
+    r = Reader(payload)
+    r.u32()  # Parent
+    r.u32()  # End
+    length = r.u32()
+    flags = r.u32()
+    offset = r.u32()
+    parent_offset = r.u32()
+    segment = r.u16()
+    parent_segment = r.u16()
+    return SepCode(segment=segment, offset=offset, length=length, flags=flags,
+                   parent_segment=parent_segment, parent_offset=parent_offset)
+
+
+def extract_sepcodes(data: bytes) -> list[SepCode]:
+    """S_SEPCODE records, in stream order -- which is what numbers them."""
+    return _decoded(parse_sepcode,
+                    (r for r in iter_records(data) if r.kind == S_SEPCODE))
+
+
+def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
     """Decode the record and walk its annotations for the code it covers.
 
     A malformed or unrecognised annotation ends the walk: operand widths are
     what keep the stream in step, so there is nothing sensible to read past
     one. The ranges found before it are still real and are kept.
+
+    `S_INLINESITE2` is the same record with an invocation count between the
+    inlinee and the annotations; the count is stepped over, since how often a
+    body was inlined is not where it is.
     """
     r = Reader(payload)
     r.u32()  # Parent
     r.u32()  # End
     inlinee = r.u32()
+    if kind == S_INLINESITE2:
+        r.u32()  # invocations
 
     site = InlineSite(inlinee=inlinee)
     code_offset = 0
+    chunk = 0  # 0 is the procedure's own body; n is its n'th separated chunk
+
+    def place(offset: int, length: int) -> None:
+        if chunk == 0:
+            site.ranges.append((offset, length))
+        else:
+            site.separated_ranges.append((chunk, offset, length))
+
     try:
         while not r.eof():
             opcode = _uncompress(r)
@@ -385,9 +506,20 @@ def parse_inline_site(payload: bytes) -> InlineSite:
             first = _uncompress(r)
             if first is None:
                 break
-            # The cursor is a running offset from the procedure's start. A
-            # length both closes a range and moves the cursor past it, so the
-            # next offset delta is measured from the end of the last range.
+            # The cursor is a running offset from the start of the chunk the
+            # ranges are in. The two opcodes that close a range treat it
+            # differently, and the difference is not a matter of taste: a
+            # standalone length is "length of code, default next start" in
+            # cvinfo.h, so the next delta is measured from the end of the
+            # range it closed; the length fused into
+            # ChangeCodeLengthAndCodeOffset does *not* move the cursor, and
+            # the next delta is measured from where that range began. Treating
+            # the two alike -- which this parser did until 0.6.0 -- placed the
+            # second and later ranges of an MSVC site past the end of the
+            # procedure 5582 times in one python312.pdb, and past the end of
+            # the cold chunk they were in; measured from the range's start,
+            # none of 79187 ranges overflows or overlaps. It is also the
+            # reading llvm-pdbutil has always used.
             if opcode == _BA_TWO_OPERANDS:
                 # The only opcode taking two operands, handled here so the
                 # second one is read and used in the same place.
@@ -395,26 +527,33 @@ def parse_inline_site(payload: bytes) -> InlineSite:
                 if second is None:
                     break
                 code_offset += second
-                site.ranges.append((code_offset, first))
-                code_offset += first
+                place(code_offset, first)
             elif opcode in (BA_OP_CODE_OFFSET, BA_OP_CHANGE_CODE_OFFSET):
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_AND_LINE_OFFSET:
                 # One operand packs both: the code delta in the low 4 bits.
                 code_offset += first & 0xF
             elif opcode == BA_OP_CHANGE_CODE_LENGTH:
-                site.ranges.append((code_offset, first))
+                place(code_offset, first)
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_BASE:
-                # Rebases the cursor rather than advancing it. Nothing in the
-                # corpus emits it, so the rebase is unverified -- and every
-                # range after it would be measured from a base we did not
-                # apply. Stop, the way an undecodable operand does: the ranges
-                # already found are real, and a short answer beats a wrong one.
-                break
+                # "nth separated code chunk (main code chunk == 0)", per
+                # cvinfo.h: the ranges that follow are in the procedure's
+                # n'th S_SEPCODE chunk, measured from its start. MSVC's
+                # profile-guided optimiser emits it first thing for a body
+                # inlined into the cold half of a split function -- 21 of
+                # the 103 sites in a python 3.12 _bz2.pdb -- and every one
+                # of those used to be dropped as describing no code.
+                chunk = first
+                code_offset = 0
     except EOFError:
         pass
     return site
+
+
+def parse_inline_site_record(kind: int, payload: bytes) -> InlineSite:
+    """`parse_inline_site` in the `(kind, payload)` convention the dispatch uses."""
+    return parse_inline_site(payload, kind)
 
 
 def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
@@ -426,10 +565,10 @@ def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
     """
     out = []
     for rec in iter_records(data):
-        if rec.kind != S_INLINESITE:
+        if rec.kind not in INLINE_SITE_KINDS:
             continue
         try:
-            out.append((rec.offset, parse_inline_site(rec.payload)))
+            out.append((rec.offset, parse_inline_site(rec.payload, rec.kind)))
         except EOFError:
             continue
     return out
@@ -875,8 +1014,33 @@ def parse_compile_info(payload: bytes) -> CompileInfo:
     )
 
 
+def parse_compile2(payload: bytes) -> CompileInfo:
+    """S_COMPILE2, the record S_COMPILE3 replaced in VS2010.
+
+    The same fields with three-part version numbers -- no QFE -- and an
+    optional block of NUL-terminated strings after the version string, which
+    is not read. A VS2008 python27.pdb carries eleven of these beside 500
+    S_COMPILE3 records (the modules the linker synthesised), and a toolchain
+    of that age writes nothing else. `cvinfo.h` calls the version string
+    length-prefixed, which is the `_ST` form; the SZ record that this kind
+    is holds a NUL-terminated one, and `link.exe` 9.00 writes it so.
+    """
+    r = Reader(payload)
+    flags = r.u32()
+    machine = r.u16()
+    frontend = (r.u16(), r.u16(), r.u16(), 0)
+    backend = (r.u16(), r.u16(), r.u16(), 0)
+    return CompileInfo(
+        language=flags & 0xFF,
+        machine=machine,
+        frontend=frontend,
+        backend=backend,
+        compiler=r.cstring(),
+    )
+
+
 def extract_compile_infos(data: bytes) -> list[CompileInfo]:
-    """Every S_COMPILE3 in one module's symbol region.
+    """Every S_COMPILE3 (or S_COMPILE2) in one module's symbol region.
 
     A module is not limited to one. An import library arrives as a single DBI
     module holding the records of every member `.obj` in it, so those modules
@@ -884,8 +1048,13 @@ def extract_compile_infos(data: bytes) -> list[CompileInfo]:
     sqlite x64 fixture. Reporting only the first would undercount the file by
     half.
     """
-    return _decoded(parse_compile_info,
-                    (r for r in iter_records(data) if r.kind == S_COMPILE3))
+    out: list[CompileInfo] = []
+    for rec in iter_records(data):
+        if rec.kind in COMPILE_KINDS:
+            info = decode_record(rec.kind, rec.payload)
+            if info is not None:
+                out.append(info)
+    return out
 
 
 def parse_thunk(payload: bytes) -> ThunkSymbol:
@@ -1053,7 +1222,9 @@ _RECORD_PARSERS: dict[int, Callable[[int, bytes], object]] = {
     S_CONSTANT: lambda _kind, payload: parse_constant(payload),
     S_UDT: lambda _kind, payload: parse_udt(payload),
     S_COMPILE3: lambda _kind, payload: parse_compile_info(payload),
-    S_INLINESITE: lambda _kind, payload: parse_inline_site(payload),
+    S_COMPILE2: lambda _kind, payload: parse_compile2(payload),
+    S_SEPCODE: lambda _kind, payload: parse_sepcode(payload),
+    **dict.fromkeys(INLINE_SITE_KINDS, parse_inline_site_record),
     **dict.fromkeys(PROC_KINDS, parse_proc),
     **dict.fromkeys(_DATA_KINDS, parse_data),
     **dict.fromkeys(PROC_REF_KINDS, parse_proc_ref),

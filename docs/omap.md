@@ -267,6 +267,39 @@ worth having: purepdb matches 2322 of 2323 `ntdll` exports on Win10 x64, 2462 of
 rest of the parser holds up on current system binaries. That is a different claim
 from the one this document is about, and the same command produces it for free.
 
+### A second run, from the symbol server alone
+
+The table above was measured against one XP and one Win7 installation. The
+2026-09 audit repeated the check with nothing but Microsoft's symbol server,
+which serves the images as well as the symbols (a PE is keyed by its
+`TimeDateStamp` and `SizeOfImage`, the way a PDB is keyed by GUID and age), and
+with the harness taught two things the bytes of Win7 `kernel32` insist on.
+Its exports point at *stubs*: `mov edi,edi; push ebp; mov ebp,esp; pop ebp;
+jmp short +5`, five nops, and then the function the PDB names — thirteen bytes
+on; or a bare `jmp short` over the padding (+7); or a `jmp short` *back* eleven
+bytes onto the `jmp [import]` the PDB names. Following the no-op prologue and
+every short or near jump lands on purepdb's address for 381 of them, which turns
+the "+13 clustering" argument into a read of the instructions. And an export
+whose address purepdb names under *another* name — `Beep` at
+`_BeepImplementation@8`, with `_Beep@8` elsewhere — is agreement about the
+address and a linker convention about the name, counted as `alias`.
+
+```
+pair                        omap  compared  exact  thunk  alias  near  far
+win7-x86 kernel32          61182      1266    863    381     21     1    0
+win7-x86 ntdll             67714      1959   1953      4      1     1    0
+win7-x86 user32            38222       632    632      0      0     0    0
+win10    kernel32              0       876    863     10      3     0    0
+win11    ntdll                 0      2458   2456      1      1     0    0
+win11    ucrtbase              0      2480   2469      1     10     0    0
+
+untranslated matches: 0 of 3857, over the pairs that carry a map
+```
+
+Zero `far` on every pair. The one `near` on each of the two Win7 files is an
+export pointing at `mov eax,eax` two bytes before the `ret` the PDB names
+(`LZDone`, `RtlDebugPrintTimes`) — a two-byte pad, not a translation.
+
 ### Reading the residue honestly
 
 `kernel32` looks worse and is not. Its mismatches are not disagreement about

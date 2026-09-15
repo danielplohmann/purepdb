@@ -95,14 +95,20 @@ def exercise(data: bytes) -> list:
     return seen
 
 
-def corpus(max_bytes: int) -> list[bytes]:
+def corpus(max_bytes: int, roots: list[Path] | None = None) -> list[bytes]:
     """Seed files to mutate, smallest first, up to `max_bytes` each.
 
     The sqlite fixtures are 3 MB and carry 70k line records, so a full parse of
     one is ~100x the cost of the rust fixtures. Capping the seed size keeps a
     default run to seconds; a nightly run raises the cap to include them.
+
+    `roots` replaces the fixture directory with directories of the caller's
+    own -- a private corpus of vendor symbol files reaches shapes the fixtures
+    do not: stripped module lists, OMAP tables, 1024-byte blocks, publics
+    sorted with a signed offset.
     """
-    paths = sorted(DATA.rglob("*.pdb"), key=lambda p: p.stat().st_size)
+    paths = sorted((path for root in (roots or [DATA]) for path in root.rglob("*.pdb")),
+                   key=lambda p: p.stat().st_size)
     return [p.read_bytes() for p in paths if p.stat().st_size <= max_bytes]
 
 
@@ -148,10 +154,13 @@ def main() -> int:
                     help="skip seed fixtures larger than this (default 1 MiB)")
     ap.add_argument("--max-seconds", type=float, default=0.0,
                     help="stop once this much wall clock has gone (0: no limit)")
+    ap.add_argument("--seed-dir", type=Path, action="append", default=None,
+                    help="mutate the PDBs under this directory instead of the "
+                         "fixtures (repeatable); nothing is written there")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
-    seeds = corpus(args.max_seed_bytes)
+    seeds = corpus(args.max_seed_bytes, args.seed_dir)
     if not seeds:
         print("no fixtures found; running with generated input only",
               file=sys.stderr)

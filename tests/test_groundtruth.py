@@ -155,6 +155,31 @@ def test_exports_agree_with_the_image(pdb_rel, image_rel, n_code, n_data):
     assert (code, data) == (n_code, n_data)
 
 
+@pytest.mark.parametrize("pdb_rel,image_rel", [
+    ("sqlite/x86/sqlite3.pdb", "sqlite/x86/sqlite3.dll"),
+    ("sqlite/x64/sqlite3.pdb", "sqlite/x64/sqlite3.dll"),
+])
+def test_trampolines_jump_where_the_record_says(pdb_rel, image_rel):
+    """Every S_TRAMPOLINE names a `jmp rel32` and where it goes; the image
+    holds the jump, so the target can be read off it and must agree.
+
+    This is the only oracle for the target field: llvm-pdbutil 18 prints the
+    thunk's own offset in the target slot, so a cross-check against it
+    verifies nothing there.
+    """
+    pdb, data = _load(pdb_rel, image_rel)
+    image = PeImage.parse(data)
+    tramps = pdb.trampolines()
+    assert tramps, "the fixture is supposed to be incrementally linked"
+    for t in tramps:
+        source = pdb.to_rva(t.segment, t.offset)
+        target = pdb.to_rva(t.target_segment, t.target_offset)
+        assert source is not None and target is not None
+        assert _follow_jmp(data, image, source) == target, (
+            f"trampoline at {source:#x} jumps elsewhere than {target:#x}")
+        assert t.size == 5, "a near jmp is five bytes"
+
+
 def _follow_jmp(data: bytes, image: PeImage, rva: int) -> int | None:
     """Resolve a `jmp rel32` thunk to its target RVA, or None if not a thunk."""
     offset = _rva_to_file_offset(data, image, rva)

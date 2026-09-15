@@ -27,6 +27,14 @@ from .msf import MsfError, UnsupportedPdbError
 from .reader import Reader
 from .sections import SectionMapEntry, parse_section_map
 
+# DBI header Flags bits. `link.exe` sets the second when a PDB was written
+# with /PDBSTRIPPED: the module symbol streams are gone, and the publics are
+# the only names left. What such a file is missing is not damage, and
+# `diagnose()` reads this bit to say so.
+DBI_FLAG_INCREMENTAL = 0x0001
+DBI_FLAG_STRIPPED = 0x0002
+DBI_FLAG_CTYPES = 0x0004
+
 # Optional Debug Header slot indices.
 DBG_OMAP_TO_SRC = 3    # final image -> original image
 DBG_OMAP_FROM_SRC = 4  # original image -> final image
@@ -154,6 +162,15 @@ class DbiStream:
     public_stream_index: int
     symrecord_stream_index: int
     machine: int
+    flags: int = 0
+    """The header's Flags word: bit 0 incrementally linked, bit 1 private
+    symbols stripped (/PDBSTRIPPED), bit 2 conflicting types."""
+    build_number: int = 0
+    """The linker's version as `(major << 8) | minor` with the top bit set on
+    every modern file. `link.exe` writes its own -- 14.00 is VS2015, 14.29 is
+    VS2019 16.11, 14.4x is VS2022 -- and every LLVM linker (`lld-link`,
+    `rust-lld`) writes 14.11 whatever its release, so the field dates a
+    Microsoft-linked PDB and only names the other kind."""
     modules: list[ModuleInfo] = field(default_factory=list)
     section_map: list[SectionMapEntry] = field(default_factory=list)
     section_contributions: list[SectionContribution] = field(default_factory=list)
@@ -169,6 +186,28 @@ class DbiStream:
     stream, or None. That substream was read as far as the stream goes and
     every one after it as empty, so modules, contributions, the section map
     or the debug-header slots may be missing -- which `diagnose()` says."""
+
+    @property
+    def is_stripped(self) -> bool:
+        """Private symbols were stripped at link time: no module holds records."""
+        return bool(self.flags & DBI_FLAG_STRIPPED)
+
+    @property
+    def incrementally_linked(self) -> bool:
+        return bool(self.flags & DBI_FLAG_INCREMENTAL)
+
+    @property
+    def toolchain_version(self) -> tuple[int, int]:
+        """`(major, minor)` of the linker, from BuildNumber, or `(0, 0)`.
+
+        The top bit says the field holds a version at all: the format's
+        documentation calls it NewVersionFormat, and the XP-era files on
+        Microsoft's symbol server have it clear with 0x3800 below it, which
+        is not 56.00 or any other version. Without the bit there is nothing
+        to read."""
+        if not self.build_number & 0x8000:
+            return (0, 0)
+        return ((self.build_number >> 8) & 0x7F, self.build_number & 0xFF)
 
     def dbg_stream(self, slot: int) -> int:
         """The stream index in an Optional Debug Header slot, or 0xFFFF."""
@@ -210,9 +249,9 @@ class DbiStream:
             )
         (
             _ver_sig, _ver_hdr, age,
-            global_idx, _build, public_idx, _dllver, symrec_idx, _rbld,
+            global_idx, build, public_idx, _dllver, symrec_idx, _rbld,
             modinfo_size, seccontrib_size, secmap_size, srcinfo_size,
-            tsmap_size, _mfc, dbg_hdr_size, ec_size, _flags, machine, _pad,
+            tsmap_size, _mfc, dbg_hdr_size, ec_size, flags, machine, _pad,
         ) = _HEADER.unpack_from(data, 0)
 
         self = cls(
@@ -221,6 +260,8 @@ class DbiStream:
             public_stream_index=public_idx,
             symrecord_stream_index=symrec_idx,
             machine=machine,
+            flags=flags,
+            build_number=build,
         )
 
         off = _HEADER.size

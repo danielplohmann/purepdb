@@ -80,6 +80,16 @@ _FOREIGN_FORMATS = (
     (_SMALL_MSF_MAGIC, "an MSF 2.00 container (Visual C++ 6 era)"),
 )
 
+# The block sizes a writer may choose. 4096 is what every modern linker
+# emits, and 512 to 2048 are the historical ones; the three above were added
+# to the format for files the 4096 geometry cannot describe. The stream
+# directory has to fit the blocks the block map can name, and the block map
+# `link.exe` writes is one block, so a PDB past a few gigabytes is written
+# with a larger block -- the same set `llvm-pdbutil` accepts. Rejecting them
+# refused precisely the huge files, with a hard error rather than an empty
+# result.
+VALID_BLOCK_SIZES = (512, 1024, 2048, 4096, 8192, 16384, 32768)
+
 # A stream size of 0xFFFFFFFF means "no stream present" (nil stream).
 INVALID_STREAM_SIZE = 0xFFFFFFFF
 
@@ -130,7 +140,7 @@ class SuperBlock:
                 if data[:len(prefix)] == prefix:
                     raise UnsupportedPdbError(f"this is {description}")
             raise MsfError("not an MSF 7.00 file (bad magic)")
-        if bs not in (512, 1024, 2048, 4096):
+        if bs not in VALID_BLOCK_SIZES:
             raise MsfError(f"unsupported block size {bs}")
         return cls(bs, fpm, nblocks, ndir, unk, bmap)
 
@@ -241,6 +251,21 @@ class MsfFile:
             off += 4 * n
             self.stream_sizes.append(size)
             self.stream_blocks.append(blocks)
+
+        # Every block belongs to one stream, so the streams together cannot
+        # hold more bytes than the file does. A directory claiming otherwise
+        # is damaged -- and the claim is what sizes the buffer `read_stream`
+        # allocates, so a 4 MB file whose block lists all name the same block
+        # would otherwise be read into gigabytes before a byte of it was
+        # checked. Each list is bounded above by the directory that holds it,
+        # so this is the one claim a single stream's check cannot catch.
+        capacity = self.super.num_blocks * bs
+        claimed = sum(size for size in self.stream_sizes if size is not None)
+        if claimed > capacity:
+            raise MsfError(
+                f"stream directory claims {claimed} bytes of streams in a "
+                f"{capacity}-byte file"
+            )
 
     # -- public API ---------------------------------------------------------
 

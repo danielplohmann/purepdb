@@ -169,9 +169,11 @@ def sections_from_map(entries: list[SectionMapEntry],
     is reconstructed the way the linker built it: the first segment starts one
     alignment unit in, and each subsequent one at the next multiple of the
     alignment past the end of the last. That reproduces the real table exactly
-    on every fixture, which is the evidence this is the right rule; it is still
-    a reconstruction, and it rests on two things the PDB does not record, so
-    neither can be checked from the file:
+    on every fixture and on every user-mode image in a 33-file corpus of real
+    PDBs (the BBT-processed ones against their pre-BBT table, which is what
+    the map describes), which is the evidence this is the right rule; it is
+    still a reconstruction, and it rests on two things the PDB does not
+    record, so neither can be checked from the file:
 
     * the image's `SectionAlignment` is the default `0x1000`;
     * `SizeOfHeaders` fits inside one alignment unit, which is what puts the
@@ -179,7 +181,9 @@ def sections_from_map(entries: list[SectionMapEntry],
       roughly 90 sections, past which the linker starts the first one a page
       later and every address here is low by exactly that.
 
-    An image that breaks either assumption comes out wrong rather than short.
+    An image that breaks either assumption comes out wrong rather than short:
+    a kernel-mode image linked with `/ALIGN:0x80` starts its first section at
+    0x380, and every address rebuilt for it is off by that much.
 
     Names are not recoverable: `SectionName` indexes a table these PDBs do not
     populate (it is 0xFFFF throughout), so segments are named by index.

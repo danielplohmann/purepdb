@@ -142,6 +142,20 @@ def test_a_zero_block_size_does_not_spin():
     assert len(c13.parse_lines(broken)) == 1
 
 
+def test_a_block_size_smaller_than_the_block_does_not_reread_its_entries():
+    """BlockSize covers the header and every entry, so it cannot be smaller
+    than what was read. A damaged one landing inside the entries used to
+    make the walk re-read line entries as a block header, and the bytes
+    of a line record parsed as (file, count, size) then reported lines that
+    were never in the file."""
+    payload = line_entries(segment=1, base_offset=0, file_entry=0,
+                           entries=[(0, 1, True), (8, 2, True), (16, 3, True)])
+    # 13 is past the 12-byte header, so the old rule trusted it and landed
+    # one byte into the first line entry.
+    broken = payload[:20] + struct.pack("<I", 13) + payload[24:]
+    assert [e.line for e in c13.parse_lines(broken)] == [1, 2, 3]
+
+
 # --- end to end -------------------------------------------------------------
 
 def _pdb(*, c13_region=b"", raw_names=b"", name_streams=None):
