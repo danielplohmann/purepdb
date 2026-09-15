@@ -31,6 +31,17 @@ resolve *differently* would be breaking, and would say so here.
 - A pull request that changes `purepdb/` or `pyproject.toml` has to add a
   `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
 
+### Fixed
+
+- A module stream signed C7 (`0`) or C11 (`1`) has its signature stripped like
+  a C13 one. Only C13 was recognised, so the other two left the signature word
+  on the front of the records, where it was read as a record header and every
+  record after it was walked at the wrong alignment -- silently, with no error
+  and no warning. A first word that is none of the three is no longer parsed
+  as records at all: the module contributes no symbols, and
+  `Diagnostics.unrecognised_signatures` counts it by the value found, which
+  the new `diagnose()` warning names.
+
 ## [0.5.0] - 2026-08-28
 
 ### Added

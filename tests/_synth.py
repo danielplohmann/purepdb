@@ -326,9 +326,9 @@ def section_header(name: str, vaddr: int, vsize: int = 0x1000,
     )
 
 
-def module_sym_stream(records: bytes) -> bytes:
+def module_sym_stream(records: bytes, signature: int = 4) -> bytes:
     """A module symbol substream: 4-byte CV signature + records."""
-    return struct.pack("<I", 4) + records
+    return struct.pack("<I", signature) + records
 
 
 def publics_hash_stream(record_offsets: list[int]) -> bytes:
