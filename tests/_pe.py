@@ -40,6 +40,10 @@ class PeImage:
     machine: int
     sections: list[PeSection]
     exports: dict[str, int]  # name -> RVA
+    export_directory: tuple[int, int] | None = None
+    """RVA range of the export directory. An export whose address falls
+    inside it is a forwarder -- a string naming another DLL's export, not
+    code -- and has no address of its own to compare."""
 
     def section_of(self, rva: int) -> PeSection | None:
         for s in self.sections:
@@ -88,6 +92,7 @@ class PeImage:
                     exports={})
         if export_rva and export_size:
             image.exports = _parse_exports(data, image, export_rva)
+            image.export_directory = (export_rva, export_rva + export_size)
         return image
 
 

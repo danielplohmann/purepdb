@@ -98,7 +98,7 @@ def pub32(name: str, segment: int, offset: int, flags: int = 0x2) -> bytes:
 
 
 def gproc32(name: str, segment: int, offset: int, code_size: int = 0x10,
-            type_index: int = 0x1000) -> bytes:
+            type_index: int = 0x1000, kind: int = 0x1110) -> bytes:
     payload = struct.pack(
         "<IIIIIIIIHB",
         0, 0, 0,            # parent, end, next
@@ -108,7 +108,7 @@ def gproc32(name: str, segment: int, offset: int, code_size: int = 0x10,
         offset, segment,
         0,                  # flags
     ) + name.encode() + b"\x00"
-    return make_record(0x1110, payload)
+    return make_record(kind, payload)
 
 
 def proc_ref(name: str, module: int, sym_offset: int, kind: int = 0x1125) -> bytes:
@@ -173,6 +173,22 @@ def trampoline(*, thunk_segment: int, thunk_offset: int,
 def inline_site(*, inlinee: int, annotations: bytes) -> bytes:
     payload = struct.pack("<III", 0, 0, inlinee) + annotations
     return make_record(0x114D, payload)
+
+
+def sepcode(*, segment: int, offset: int, length: int,
+            parent_segment: int, parent_offset: int) -> bytes:
+    """S_SEPCODE, closed by S_END: a chunk of a procedure's code laid out
+    elsewhere, naming the procedure by address."""
+    payload = struct.pack("<IIIIIIHH", 0, 0, length, 0, offset, parent_offset,
+                          segment, parent_segment)
+    return make_record(0x1132, payload) + make_record(0x0006, b"")
+
+
+def inline_site2(*, inlinee: int, annotations: bytes, invocations: int = 1) -> bytes:
+    """S_INLINESITE2: the same record with an invocation count before the
+    annotations."""
+    payload = struct.pack("<IIII", 0, 0, inlinee, invocations) + annotations
+    return make_record(0x115D, payload)
 
 
 _ID_KINDS = {"func": 0x1601, "mfunc": 0x1602, "string": 0x1605, "other": 0x1603}
@@ -278,7 +294,8 @@ def section_contributions(entries: list[tuple[int, int, int, int]],
 
 def dbi_stream(*, public_stream: int, symrecord_stream: int,
                module_list: bytes, dbg_header: list[int],
-               sec_map: bytes = b"", sec_contrib: bytes = b"") -> bytes:
+               sec_map: bytes = b"", sec_contrib: bytes = b"",
+               flags: int = 0, build_number: int = 0) -> bytes:
     dbg_bytes = struct.pack(f"<{len(dbg_header)}H", *dbg_header)
     header = struct.pack(
         "<iIIHHHHHHiiiiiIiiHHI",
@@ -286,7 +303,7 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         19990903,           # VersionHeader (V70)
         1,                  # Age
         0xFFFF,             # GlobalStreamIndex
-        0,                  # BuildNumber
+        build_number,       # BuildNumber
         public_stream,      # PublicStreamIndex
         0,                  # PdbDllVersion
         symrecord_stream,   # SymRecordStreamIndex
@@ -298,7 +315,7 @@ def dbi_stream(*, public_stream: int, symrecord_stream: int,
         0,                  # MFCTypeServerIndex
         len(dbg_bytes),     # OptionalDbgHeaderSize
         0,                  # ECSubstreamSize
-        0,                  # Flags
+        flags,              # Flags
         0x8664,             # Machine (AMD64)
         0,                  # Padding
     )
@@ -488,6 +505,22 @@ def compile3(compiler: str, *, language: int = 0x15, machine: int = 0xD0,
     payload += struct.pack("<8H", *frontend, *backend)
     payload += compiler.encode() + b"\x00"
     return make_record(0x113C, payload)
+
+
+def compile2(compiler: str, *, language: int = 0x07, machine: int = 0xD0,
+             frontend: tuple[int, int, int] = (0, 0, 0),
+             backend: tuple[int, int, int] = (9, 0, 30729),
+             extra_strings: tuple[str, ...] = ()) -> bytes:
+    """S_COMPILE2, as `link.exe` 9.00 writes it: three-part versions, a
+    NUL-terminated version string, then an optional block of NUL-terminated
+    strings ended by a second NUL."""
+    payload = struct.pack("<IH", language, machine)
+    payload += struct.pack("<6H", *frontend, *backend)
+    payload += compiler.encode() + b"\x00"
+    for extra in extra_strings:
+        payload += extra.encode() + b"\x00"
+    payload += b"\x00"
+    return make_record(0x1116, payload)
 
 
 def gdata32(name: str, segment: int, offset: int, type_index: int = 0x74,

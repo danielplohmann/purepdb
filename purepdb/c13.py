@@ -144,9 +144,11 @@ def parse_lines(payload: bytes) -> list[LineEntry]:
                 is_statement=bool(packed & 0x80000000),
             ))
 
-        # BlockSize covers the header, the line entries and any column entries.
-        # Trust it to advance, but never backwards: a zero would spin forever.
-        step = block_size if block_size > _LINE_BLOCK_HEADER.size else (
-            _LINE_BLOCK_HEADER.size + needed)
-        pos += step
+        # BlockSize covers the header, the line entries and any column entries,
+        # so it can never be smaller than what was just read out of the block.
+        # A value that is -- zero, which would spin forever, or a damaged one
+        # landing inside the entries -- would re-read line entries as a block
+        # header and report the lines it made of them; the bytes consumed are
+        # the floor.
+        pos += max(block_size, _LINE_BLOCK_HEADER.size + needed)
     return out

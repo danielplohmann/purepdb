@@ -21,7 +21,7 @@ from tests._synth import (
 )
 
 # A record kind purepdb does not decode, with a plausible payload.
-UNKNOWN_KIND = 0x1167
+UNKNOWN_KIND = 0x1FFF
 
 
 def _pdb(*, module_records=b"", pub_records=(), section_stream=6):
@@ -68,7 +68,7 @@ def test_undecodable_module_streams_are_explained():
 
     warning = "\n".join(d.warnings)
     assert "no procedure records" in warning
-    assert "0x1167" in warning, "the unrecognised kind must be named"
+    assert "0x1fff" in warning, "the unrecognised kind must be named"
     assert "FASTLINK" in warning
     # The publics path still works, which is the whole point of saying so.
     assert [f.name for f in pdb.functions()] == ["thunk"]
@@ -118,3 +118,74 @@ def test_line_info_after_the_symbols_is_not_parsed_as_records():
     pdb = PDB.from_bytes(build_msf(streams))
     names = [p.name for p in pdb.module_procs()]
     assert names == ["real"], "must stop at sym_byte_size"
+
+
+def _publics_only(*, flags=0, build_number=0, modules=1):
+    """The stripped shape: publics, section headers, and modules with no
+    symbol stream -- or no modules at all."""
+    pubs = [pub32("main", 1, 0x10), pub32("helper", 1, 0x40)]
+    mods = b"".join(
+        module_info(f"m{i}.obj", f"m{i}.obj", sym_stream=0xFFFF, sym_byte_size=0)
+        for i in range(modules)
+    )
+    streams = [
+        b"",
+        struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=6, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [5], flags=flags,
+                   build_number=build_number),
+        publics_hash_stream(record_offsets(pubs)),
+        section_header(".text", 0x1000),
+        b"".join(pubs),
+    ]
+    return PDB.from_bytes(build_msf(streams))
+
+
+def test_a_stripped_pdb_says_so():
+    """`/PDBSTRIPPED` drops every module stream and sets a DBI flag. With no
+    module walked, nothing else in diagnose() could explain a listing that
+    holds publics and nothing else."""
+    pdb = _publics_only(flags=0x0002, build_number=0x8E1D)  # VS2019 16.11: 14.29, top bit set
+    d = pdb.diagnose()
+    assert d.private_symbols_stripped
+    assert d.modules == 1 and d.modules_with_symbols == 0
+    assert d.proc_records == 0
+    assert d.linker_version == (14, 29)
+    warning = "\n".join(d.warnings)
+    assert "stripped" in warning
+    assert "/PDBSTRIPPED" in warning
+    assert "2 public records" in warning
+    # And the publics path still works: two functions, addresses resolved.
+    assert [(f.name, f.rva, f.code_size) for f in pdb.functions()] == [
+        ("main", 0x1010, None), ("helper", 0x1040, None)]
+
+
+def test_modules_without_any_symbol_stream_are_explained():
+    """Same shape, flag clear: the DBI does not say why, and neither may we,
+    but the silence still has to be broken."""
+    d = _publics_only(modules=3).diagnose()
+    assert not d.private_symbols_stripped
+    assert d.linker_version == (0, 0)
+    warning = "\n".join(d.warnings)
+    assert "none of the 3 module(s) has a symbol stream" in warning
+    assert "does not say the file was stripped" in warning
+
+
+def test_an_empty_module_list_is_explained():
+    d = _publics_only(modules=0).diagnose()
+    assert d.modules == 0
+    assert any("module list is empty" in w for w in d.warnings)
+
+
+def test_a_build_number_without_the_version_bit_is_not_a_version():
+    """XP-era files carry 0x3800 with the top bit clear, which read as 56.00."""
+    d = _publics_only(flags=0x0002, build_number=0x3800).diagnose()
+    assert d.linker_version == (0, 0)
+
+
+def test_a_healthy_pdb_reports_its_linker():
+    pdb = _pdb(module_records=gproc32("main", 1, 0x10),
+               pub_records=[pub32("main", 1, 0x10)])
+    assert pdb.diagnose().linker_version == (0, 0)
+    assert not pdb.diagnose().private_symbols_stripped

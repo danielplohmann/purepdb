@@ -16,6 +16,37 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Added
 
+- `diagnose()` explains a PDB whose modules carry no symbol stream at all. That
+  is what `link.exe /PDBSTRIPPED` writes, and what every public symbol file on
+  Microsoft's symbol server is: publics, section headers and FPO data, with
+  every module's symbols gone by design. The shape produced no warning, because
+  every existing sentence is reached by walking a module stream and there was
+  none to walk -- a listing with publics and nothing else came back with no
+  explanation, and `code_size` was `None` throughout with nothing saying why.
+  `Diagnostics.private_symbols_stripped` reads the DBI header's stripped flag,
+  which the linker sets for the purpose; the warning names `/PDBSTRIPPED` when
+  the flag is set, says the header does not claim stripping when it is clear,
+  and covers an empty module list separately. `Diagnostics.linker_version` is
+  the DBI `BuildNumber` as `(major, minor)`: `link.exe` writes its own (14.00
+  is VS2015, 14.29 is VS2019 16.11), which is what dates a file when nothing
+  else does, and every LLVM linker writes 14.11 whatever its release, on all
+  four fixtures it produced. `DbiStream.flags`, `build_number`, `is_stripped`,
+  `incrementally_linked` and `toolchain_version` carry the same facts at the
+  stream level, and the `diagnose` subcommand opens with a `linker` line.
+- MSF block sizes of 8192, 16384 and 32768 are accepted. The block map is one
+  block and has to name every block of the stream directory, so a PDB past a
+  few gigabytes is written with a larger block; those files were refused with
+  `unsupported block size`, a hard error on exactly the huge inputs. The set
+  is now the one `llvm-pdbutil` accepts.
+- `S_INLINESITE2` is decoded as an inline site. It is `S_INLINESITE` with an
+  invocation count between the inlinee and the annotations; reading the
+  annotations from where the older record keeps them would have decoded the
+  count as opcodes. Counted with the other kind in `Diagnostics.inline_sites`.
+  This is the form MSVC writes: a python 3.12 `python312.pdb` has 48608 of
+  its 48642 sites in it, and reported 34 before.
+- `S_LPROC32_DPC` and `S_LPROC32_DPC_ID` are procedures. `cvinfo.h` lists all
+  six kinds on the one `PROCSYM32` layout, so a body compiled for a DPC target
+  has an entry point like any other and now reaches `functions()`.
 - Pushing a `vX.Y.Z` tag now publishes the release. The workflow refuses to
   continue unless the tag matches both version strings, `CHANGELOG.md` has a
   section for it, the commit is on `main`, CI passed there, and a milestone
@@ -30,6 +61,67 @@ resolve *differently* would be breaking, and would say so here.
   and `testpypi` environments are configured once by a maintainer.
 - A pull request that changes `purepdb/` or `pyproject.toml` has to add a
   `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
+
+- `diagnose()` says when inline sites have no name to give. An inlined body is
+  named by an item id into the IPI stream; VS2015's compiler wrote a function
+  id as `0x80000000 | n` with a small `n` (cvinfo.h's `DecoratedItemId`, "in
+  compiler implementation") and its linker left them so, which is 5802 of the
+  6554 sites in a python 3.5 `_hashlib.pdb` naming an id no stream holds.
+  `inline_sites()` reported those with an empty `name` and nothing said why;
+  `llvm-pdbutil` cannot name them either. `Diagnostics.unnamed_inline_sites`
+  counts them, `Diagnostics.has_id_table` says whether there was an IPI stream
+  to look in at all, one warning covers each case, and the `diagnose`
+  subcommand shows the count beside the sites.
+- `compile_info()` reads `S_COMPILE2`, the record `S_COMPILE3` replaced in
+  VS2010. The same facts with three-part version numbers, reported with a
+  QFE of 0. A python.org 2.7.18 PDB (VS2008) carries eleven beside its 500
+  `S_COMPILE3` records, and older toolchains write nothing else; `link.exe`
+  14.00 still writes it for import-library modules, so the sqlite fixtures
+  each gain four `Link` records (159 and 149).
+- `tools/fuzz.py --seed-dir DIR` mutates the PDBs under a directory of the
+  caller's own instead of the fixtures. A private corpus of vendor symbol files
+  reaches shapes the fixtures do not -- stripped module lists, OMAP tables,
+  1024-byte blocks, publics sorted with a signed offset -- and nothing is
+  written there.
+
+### Fixed
+
+- Inline-site ranges after a `ChangeCodeLengthAndCodeOffset` annotation were
+  placed too far along by the length of every fused range before them. The
+  length fused into that opcode does not move the cursor; the next delta is
+  measured from where the range began, which is how `llvm-pdbutil` has always
+  read it and how cvinfo.h distinguishes it from the standalone
+  `ChangeCodeLength` ("default next start"). purepdb read both the same way,
+  and 0.5.0 rebuilt the cross-check's ranges on that rule to make the two
+  agree. No fixture could tell the readings apart; the python 3.12 PDBs can:
+  5582 of python312.pdb's 79187 ranges end past their procedure or cold chunk
+  under the old rule, and none under this one. **This moves addresses**: on a
+  file whose sites use the fused opcode -- every rust-lld and clang output --
+  the second and later ranges of a site now start earlier than 0.5.0 reported.
+  The first range, and every site with one range, are unchanged.
+- Inline sites in the cold half of a split function are placed. Their
+  annotations open with `ChangeCodeOffsetBase n`, which cvinfo.h defines as
+  "nth separated code chunk (main code chunk == 0)": the ranges that follow
+  are in the procedure's n'th `S_SEPCODE` chunk, measured from its start.
+  purepdb stopped at the opcode as unverified and reported the site as
+  describing no code -- 21 of the 103 in a python 3.12 `_bz2.pdb`, every one
+  a body inlined into code the profile-guided optimiser moved. `S_SEPCODE` is
+  now decoded (`codeview.SepCode`), a site's separated ranges join its others
+  when the chunk is in the same section, and a chunk in another section is
+  reported as a second `InlineFunction` for the same site, since one entry
+  has one `segment`. `InlineSite.separated_ranges` carries the raw triples,
+  and `InlineFunction.record_kind` says which record described a site.
+- A stream directory whose block lists together describe more bytes than the
+  file holds is rejected. Each list is bounded by the directory, so every
+  per-stream check passed; but every block belongs to one stream, so the sizes
+  cannot sum past the file, and the sum is what `read_stream` allocates for --
+  a 4 MB file naming one block in every list read into gigabytes before a
+  byte of it was checked.
+- A `DEBUG_S_LINES` block whose `BlockSize` is smaller than the entries it
+  holds no longer has those entries re-read as the next block header. The
+  size cannot be less than what was just read out of the block, so the bytes
+  consumed are now the floor; a damaged size landing inside the entries used
+  to report lines made of line-record bytes.
 
 ## [0.5.0] - 2026-08-28
 
