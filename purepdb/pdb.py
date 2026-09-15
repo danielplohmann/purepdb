@@ -42,7 +42,10 @@ STREAM_DBI = 3
 STREAM_IPI = 4
 
 # CodeView signature that prefixes each module symbol substream, and its size.
+CV_SIGNATURE_C7 = 0
+CV_SIGNATURE_C11 = 1
 CV_SIGNATURE_C13 = 4
+CV_SIGNATURES = frozenset({CV_SIGNATURE_C7, CV_SIGNATURE_C11, CV_SIGNATURE_C13})
 CV_SIGNATURE_SIZE = 4
 
 # The fixed header of the PDB Info stream: version, signature, age, GUID. It
@@ -337,6 +340,11 @@ class Diagnostics:
     files teaches a reader to skip the list, which costs the entries that do
     matter. The count and the note beside it in `purepdb diagnose` are the
     explanation, in the report rather than in the alarm channel."""
+    unrecognised_signatures: dict[int, int] = field(default_factory=dict)
+    """Module streams whose first word is not a CodeView signature (C7, C11 or
+    C13), counted by that word. Their records are not read: the layout after
+    an unknown signature is not known, and parsing the word as a record header
+    would misalign every record after it."""
 
     @property
     def truncated_streams(self) -> int:
@@ -450,6 +458,14 @@ class Diagnostics:
                     f"records. This is what /DEBUG:FASTLINK and some pre-2010 "
                     f"toolchains produce"
                 )
+        if self.unrecognised_signatures:
+            found = ", ".join(f"{sig:#x}x{n}" for sig, n in
+                              sorted(self.unrecognised_signatures.items()))
+            out.append(
+                f"{sum(self.unrecognised_signatures.values())} module "
+                f"stream(s) begin with a word that is not a CodeView signature "
+                f"(found: {found}); their symbols were not read"
+            )
         if self.public_records == 0:
             out.append(
                 "no public records in the symbol-record stream; thunks and "
@@ -829,15 +845,25 @@ class PDB:
         info`, and only the first region holds symbol records. `sym_byte_size`
         bounds it *including* the 4-byte signature, so parsing past it walks
         line-info bytes as if they were records. Returns b"" when the module
-        has no symbols.
+        has no symbols, or when its first word is not a signature purepdb
+        recognises -- `Diagnostics.unrecognised_signatures` counts those.
         """
+        return self._module_symbols(mod)[1]
+
+    def _module_symbols(self, mod) -> tuple[int | None, bytes]:
+        """`module_symbol_bytes` and the unrecognised signature, if any."""
         if not mod.has_symbols or not self.msf.is_valid_stream(mod.sym_stream):
-            return b""
+            return None, b""
         raw = self.msf.read_stream(mod.sym_stream)
         end = min(mod.sym_byte_size, len(raw))
-        if len(raw) >= 4 and struct.unpack_from("<I", raw, 0)[0] == CV_SIGNATURE_C13:
-            return raw[4:end]
-        return raw[:end]
+        # Too short to hold a signature: left for the record walk to report
+        # as a truncation.
+        if len(raw) < 4:
+            return None, raw[:end]
+        signature = struct.unpack_from("<I", raw, 0)[0]
+        if signature not in CV_SIGNATURES:
+            return signature, b""
+        return None, raw[4:end]
 
     def module_c13_bytes(self, mod) -> bytes:
         """The C13 line-info region of one module's stream.
@@ -1374,6 +1400,7 @@ class PDB:
         malformed = 0
         malformed_inline = 0
         line_bytes = 0
+        signatures: dict[int, int] = {}
         proc_records = 0
         placed_sites = 0
         unnamed_sites = 0
@@ -1388,7 +1415,9 @@ class PDB:
         # only the records `parse_proc` raises on.
         for mod in self.dbi.modules:
             line_bytes += len(self.module_c13_bytes(mod))
-            body = self.module_symbol_bytes(mod)
+            signature, body = self._module_symbols(mod)
+            if signature is not None:
+                signatures[signature] = signatures.get(signature, 0) + 1
             if not body:
                 continue
             with_symbols += 1
@@ -1501,6 +1530,7 @@ class PDB:
             private_symbols_stripped=self.dbi.is_stripped,
             linker_version=self.dbi.toolchain_version,
             thread_local_records=thread_locals,
+            unrecognised_signatures=signatures,
         )
 
     def _is_code(self, segment: int) -> bool:
