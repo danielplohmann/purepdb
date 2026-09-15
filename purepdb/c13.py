@@ -67,9 +67,11 @@ class Subsection:
     payload: bytes
 
 
-@dataclass
+@dataclass(slots=True)
 class LineEntry:
-    """One source line, at a `segment:offset` in the image."""
+    """One source line, at a `segment:offset` in the image.
+
+    Slotted, like `pdb.Line`: one per line entry, tens of thousands per file."""
 
     segment: int
     offset: int
@@ -134,14 +136,17 @@ def parse_lines(payload: bytes) -> list[LineEntry]:
         if needed > len(payload) - entries_at:
             break
 
-        for i in range(num_lines):
-            offset, packed = _LINE_ENTRY.unpack_from(payload, entries_at + i * _LINE_ENTRY.size)
+        # The entries are a packed array, which `iter_unpack` walks without
+        # a per-entry offset computation; the column entries, if any, follow
+        # the whole array rather than interleaving with it.
+        entries = payload[entries_at : entries_at + num_lines * _LINE_ENTRY.size]
+        for offset, packed in _LINE_ENTRY.iter_unpack(entries):
             out.append(LineEntry(
-                segment=segment,
-                offset=base_offset + offset,
-                line=packed & 0x00FFFFFF,
-                file_offset=file_entry,
-                is_statement=bool(packed & 0x80000000),
+                segment,
+                base_offset + offset,
+                packed & 0x00FFFFFF,
+                file_entry,
+                bool(packed & 0x80000000),
             ))
 
         # BlockSize covers the header, the line entries and any column entries,
