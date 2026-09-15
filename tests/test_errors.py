@@ -16,6 +16,7 @@ from purepdb.pdb import PDB_INFO_VC70
 from tests._synth import (
     build_msf,
     dbi_stream,
+    gproc32,
     module_info,
     module_sym_stream,
     publics_hash_stream,
@@ -303,3 +304,66 @@ def test_a_module_record_with_an_unterminated_name_stops_the_walk():
     pdb = PDB.from_bytes(build_msf(streams))
     assert [m.module_name for m in pdb.dbi.modules] == ["main.obj"]
     assert pdb.functions() == []
+
+
+def test_dbi_substream_corrupted_sizes_raise_msf_error():
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parent / "data" / "sqlite" / "x86" / "sqlite3.pdb"
+    if not fixture.exists():
+        pytest.skip("fixture absent")
+    pdb = PDB.open(str(fixture))
+    raw_dbi = pdb.msf.read_stream(3)
+    # Substream size slots in DBI header:
+    # 24: ModInfo, 28: SecContrib, 32: SecMap, 36: SrcInfo, 40: TSMap, 48: DbgHdr, 52: EC
+    size_offsets = [24, 28, 32, 36, 40, 48, 52]
+    for offset in size_offsets:
+        # Corrupted negative size:
+        corrupted = bytearray(raw_dbi)
+        struct.pack_into("<i", corrupted, offset, -1)
+        with pytest.raises(MsfError, match="substream size is negative"):
+            DbiStream.parse(bytes(corrupted))
+
+        # A size past the end of the stream is read as far as the stream goes
+        # and recorded, not raised: what is there is real.
+        corrupted = bytearray(raw_dbi)
+        struct.pack_into("<i", corrupted, offset, len(raw_dbi) + 100)
+        dbi = DbiStream.parse(bytes(corrupted))
+        assert dbi.substream_overrun is not None
+        assert f"claims {len(raw_dbi) + 100} bytes" in dbi.substream_overrun
+
+
+def test_a_dbi_stream_shorter_than_its_header_claims_is_read_and_explained():
+    """A DBI stream cut short is read as far as it goes, and diagnose() says
+    so. Raising here was tried and reverted: it turned a file missing the
+    last eight bytes of its debug header -- every function recoverable --
+    into one that would not open, with no diagnostic to say why. A negative
+    size is different (it aliases earlier bytes) and still raises.
+    """
+    mods = module_info("main.obj", "main.obj", sym_stream=5, sym_byte_size=4)
+    data = dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
+                      dbg_header=[0xFFFF] * 5 + [6])
+    whole = DbiStream.parse(data)
+    assert [m.module_name for m in whole.modules] == ["main.obj"]
+    assert whole.substream_overrun is None
+
+    cut = DbiStream.parse(data[:-8])
+    assert [m.module_name for m in cut.modules] == ["main.obj"]
+    assert cut.substream_overrun is not None
+    assert "OptionalDebugHeader" in cut.substream_overrun
+
+    syms = module_sym_stream(gproc32("main", 1, 0x10))
+    streams = [
+        b"",
+        struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
+        b"",
+        data[:-8],
+        publics_hash_stream([]),
+        syms,
+        section_header(".text", 0x1000),
+        b"",
+    ]
+    pdb = PDB.from_bytes(build_msf(streams))
+    d = pdb.diagnose()
+    assert d.dbi_overrun is not None
+    assert any("shorter than its header claims" in w for w in d.warnings)

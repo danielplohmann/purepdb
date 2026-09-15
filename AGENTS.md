@@ -119,7 +119,7 @@ activate it first and drop the override):
 | corpus audit | `.venv/bin/python dev/audit_corpus.py <dir>` (every listing over every file, escapes and undecoded kinds tallied) |
 | OMAP vs Windows | `.venv/bin/python dev/validate_omap_against_windows.py <dll-dir> --fetch` (needs Windows DLLs and network; nothing is redistributed) |
 
-Expected state on a clean tree: **636 tests pass**, `ruff check` and `ty check`
+Expected state on a clean tree: **645 tests pass**, `ruff check` and `ty check`
 both clean, and the fuzzer reports no escaped exception. Run tests, lint *and*
 a quick fuzz pass before considering work complete.
 

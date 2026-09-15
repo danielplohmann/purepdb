@@ -16,6 +16,9 @@ resolve *differently* would be breaking, and would say so here.
 
 ### Added
 
+- `Diagnostics.c13_truncations` records where and why a C13 line-info walk
+  stopped early, accompanied by an explanatory warning in `Diagnostics.warnings`.
+  `C13Truncation` is exported in `purepdb.__all__`.
 - `diagnose()` explains a PDB whose modules carry no symbol stream at all. That
   is what `link.exe /PDBSTRIPPED` writes, and what every public symbol file on
   Microsoft's symbol server is: publics, section headers and FPO data, with
@@ -166,6 +169,27 @@ resolve *differently* would be breaking, and would say so here.
   size cannot be less than what was just read out of the block, so the bytes
   consumed are now the floor; a damaged size landing inside the entries used
   to report lines made of line-record bytes.
+- `PDB.named_streams()` returns `{}` when the PDB Info stream is absent or
+  invalid, matching its documented contract and preventing `MsfError` from
+  escaping `string_table()`, `lines()`, and `diagnose()`.
+- `PublicsStream.parse()` raises `PdbError` rather than `ValueError` on
+  truncated input, ensuring `PdbError` remains the only exception surface a
+  caller must handle. Plain `PdbError` rather than `MsfError`: the publics
+  stream is not an MSF container.
+- `DbiStream.parse()` checks its substream sizes. A negative one raises
+  `MsfError`: it makes the next substream's offset go backwards, so every
+  later slice would alias bytes that were never substream data. A size past
+  the end of the stream is read as far as the stream goes and recorded in
+  `DbiStream.substream_overrun`, which `diagnose()` reports as
+  `Diagnostics.dbi_overrun` with a warning naming the substream -- a file
+  missing the last eight bytes of its debug header still yields every
+  function, and now says what it is missing. (Raising for the overrun too was
+  tried on this branch and reverted: it turned such a file into one that
+  would not open, with no diagnostic to say why.)
+- C13 trailing bytes are reported as a truncation only when they hold
+  something. Fewer than eight bytes after the last subsection cannot be a
+  header; zero ones are a producer's padding, and the lines before them are
+  all present.
 - A module stream signed C7 (`0`) or C11 (`1`) has its signature stripped like
   a C13 one. Only C13 was recognised, so the other two left the signature word
   on the front of the records, where it was read as a record header and every

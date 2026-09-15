@@ -9,6 +9,7 @@ and `PDB.diagnose()` says so rather than letting the caller read an unexplained
 empty list.
 """
 
+from .c13 import C13Truncation
 from .codeview import (
     CompileInfo,
     Constant,
@@ -48,6 +49,7 @@ __version__ = "0.5.0"
 
 __all__ = [
     "PDB",
+    "C13Truncation",
     "CompileInfo",
     "Constant",
     "DataSymbol",

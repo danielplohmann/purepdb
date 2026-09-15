@@ -9,6 +9,7 @@ validate an actual round trip rather than a shared bug.
 from __future__ import annotations
 
 import struct
+from collections.abc import Sequence
 
 from purepdb.dbi import SEC_CONTRIB_V2, SEC_CONTRIB_VER60
 from purepdb.msf import BIG_MSF_MAGIC
@@ -18,13 +19,16 @@ def _ceil_div(a, b):
     return (a + b - 1) // b
 
 
-def build_msf(streams: list[bytes], block_size: int = 512) -> bytes:
+def build_msf(streams: Sequence[bytes | None], block_size: int = 512) -> bytes:
     """Serialise a list of streams into a valid MSF 7.00 container."""
     bs = block_size
     next_block = 3  # 0=superblock, 1=FPM1, 2=FPM2
 
     placed = []  # (size, [block indices], data)
     for data in streams:
+        if data is None:
+            placed.append((0xFFFFFFFF, [], b""))
+            continue
         n = _ceil_div(len(data), bs) if data else 0
         blocks = list(range(next_block, next_block + n))
         next_block += n

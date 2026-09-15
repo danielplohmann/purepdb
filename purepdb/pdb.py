@@ -340,6 +340,13 @@ class Diagnostics:
     files teaches a reader to skip the list, which costs the entries that do
     matter. The count and the note beside it in `purepdb diagnose` are the
     explanation, in the report rather than in the alarm channel."""
+    c13_truncations: list[tuple[str, c13.C13Truncation]] = field(default_factory=list)
+    """Where a C13 line-info walk stopped short of consuming its buffer, and why."""
+    dbi_overrun: str | None = None
+    """A DBI substream whose declared size ran past the stream, if any. It was
+    read as far as the stream goes and the substreams after it as empty, so
+    modules, section contributions, the section map or the debug-header slots
+    may be missing."""
     unrecognised_signatures: dict[int, int] = field(default_factory=dict)
     """Module streams whose first word is not a CodeView signature (C7, C11 or
     C13), counted by that word. Their records are not read: the layout after
@@ -527,6 +534,14 @@ class Diagnostics:
                 "is in the pre-optimisation address space and does not match "
                 "the shipped image"
             )
+        if self.dbi_overrun is not None:
+            out.append(
+                f"the DBI stream is shorter than its header claims "
+                f"({self.dbi_overrun}); that substream was read as far as the "
+                f"stream goes and the ones after it as empty, so modules, "
+                f"section contributions, the section map or the debug-header "
+                f"slots may be missing"
+            )
         if self.module_list_stopped_at is not None:
             out.append(
                 f"the module list stopped at byte "
@@ -586,6 +601,13 @@ class Diagnostics:
                 f"{self.line_bytes} bytes of C13 line info are present but the "
                 f"/names stream is not, so file-name offsets cannot be resolved "
                 f"and lines() yields nothing"
+            )
+        if self.c13_truncations:
+            where, first = self.c13_truncations[0]
+            out.append(
+                f"{len(self.c13_truncations)} C13 line-info section(s) stopped early; "
+                f"lines after that point are missing. First: {where} at "
+                f"byte {first.offset:#x} ({first.reason})"
             )
         if self.pdb_info_error is not None:
             out.append(
@@ -814,7 +836,7 @@ class PDB:
             return None
         try:
             return PublicsStream.parse(self.msf.read_stream(idx))
-        except (ValueError, struct.error):
+        except (PdbError, struct.error):
             return None
 
     def public_symbols(self) -> list[codeview.PublicSymbol]:
@@ -1304,7 +1326,12 @@ class PDB:
 
         `/names` and `/LinkInfo` are what real linkers put here.
         """
-        return parse_named_stream_map(self.msf.read_stream(STREAM_PDB_INFO))
+        if not self.msf.is_valid_stream(STREAM_PDB_INFO):
+            return {}
+        try:
+            return parse_named_stream_map(self.msf.read_stream(STREAM_PDB_INFO))
+        except MsfError:
+            return {}
 
     def string_table(self) -> StringTable | None:
         """The `/names` global string table, or None when the PDB has none."""
@@ -1400,6 +1427,7 @@ class PDB:
         malformed = 0
         malformed_inline = 0
         line_bytes = 0
+        c13_truncations: list[tuple[str, c13.C13Truncation]] = []
         signatures: dict[int, int] = {}
         proc_records = 0
         placed_sites = 0
@@ -1414,7 +1442,24 @@ class PDB:
         # exactly what `module_procs()` returns since `extract_procs` drops
         # only the records `parse_proc` raises on.
         for mod in self.dbi.modules:
-            line_bytes += len(self.module_c13_bytes(mod))
+            c13_bytes = self.module_c13_bytes(mod)
+            line_bytes += len(c13_bytes)
+            if c13_bytes:
+                # The truncation reports come from re-decoding every
+                # DEBUG_S_LINES payload here and discarding the entries:
+                # 18ms of the 180ms diagnose() costs on the 3 MB sqlite
+                # fixture. Deliberate: `parse_lines` is the only
+                # implementation of the block walk,
+                # and a header-only twin kept beside it would drift from it.
+                # `lines()` cannot be reused for this: it is a generator a
+                # caller may never consume, and it resolves file names,
+                # which this loop does not want.
+                mod_c13_report: list[c13.C13Truncation] = []
+                for sub in c13.iter_subsections(c13_bytes, truncation=mod_c13_report):
+                    if sub.kind == c13.DEBUG_S_LINES:
+                        c13.parse_lines(sub.payload, truncation=mod_c13_report)
+                for t in mod_c13_report:
+                    c13_truncations.append((f"module {mod.index} ({mod.module_name})", t))
             signature, body = self._module_symbols(mod)
             if signature is not None:
                 signatures[signature] = signatures.get(signature, 0) + 1
@@ -1527,9 +1572,11 @@ class PDB:
             has_string_table=self.string_table() is not None,
             pdb_info_error=pdb_info_error,
             module_list_stopped_at=self.dbi.module_list_stopped_at,
+            dbi_overrun=self.dbi.substream_overrun,
             private_symbols_stripped=self.dbi.is_stripped,
             linker_version=self.dbi.toolchain_version,
             thread_local_records=thread_locals,
+            c13_truncations=c13_truncations,
             unrecognised_signatures=signatures,
         )
 

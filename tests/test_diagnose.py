@@ -123,6 +123,28 @@ def test_line_info_after_the_symbols_is_not_parsed_as_records():
     assert names == ["real"], "must stop at sym_byte_size"
 
 
+def test_missing_pdb_info_stream_is_explained():
+    mods = module_info("main.obj", "main.obj", sym_stream=5, sym_byte_size=4)
+    streams = [
+        b"",
+        None,  # stream 1 (PDB Info) is absent
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [6]),
+        publics_hash_stream([]),
+        module_sym_stream(b""),
+        section_header(".text", 0x1000),
+        b"",
+    ]
+    pdb = PDB.from_bytes(build_msf(streams))
+    d = pdb.diagnose()
+    assert d.pdb_info_error is not None
+    assert d.has_string_table is False
+    assert any("the PDB Info stream cannot be read" in w for w in d.warnings)
+    assert pdb.string_table() is None
+    assert list(pdb.lines()) == []
+
+
 @pytest.mark.parametrize("signature", [0, 1, 4], ids=["C7", "C11", "C13"])
 def test_every_codeview_signature_is_stripped(signature):
     pdb = _pdb(module_records=gproc32("main", 1, 0x10),

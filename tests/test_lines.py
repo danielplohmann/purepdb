@@ -329,7 +329,9 @@ def test_diagnose_reports_the_line_info_on_every_fixture(rel):
     d = _open(rel).diagnose()
     assert d.line_bytes > 0
     assert d.has_string_table
+    assert d.c13_truncations == []
     assert not any("/names" in w for w in d.warnings)
+    assert not any("C13 line-info" in w for w in d.warnings)
 
 
 def test_line_info_without_the_names_stream_is_warned_about():
@@ -361,3 +363,60 @@ def test_a_pdb_with_no_line_info_is_not_warned_about():
     d = pdb.diagnose()
     assert d.line_bytes == 0
     assert not any("/names" in w for w in d.warnings)
+    assert d.c13_truncations == []
+
+
+def test_truncated_c13_subsection_header_is_warned_about():
+    # Only 4 bytes: not enough for the 8-byte (kind, length) subsection header.
+    pdb = _pdb(c13_region=b"\x01\x00\x00\x00")
+    d = pdb.diagnose()
+    assert len(d.c13_truncations) == 1
+    assert any("C13 line-info section(s) stopped early" in w for w in d.warnings)
+
+
+def test_c13_subsection_length_past_end_is_warned_about():
+    # Header claims 500 bytes payload, but only 8 bytes remain.
+    region = struct.pack("<II", c13.DEBUG_S_LINES, 500) + b"\x00" * 8
+    pdb = _pdb(c13_region=region)
+    d = pdb.diagnose()
+    assert len(d.c13_truncations) == 1
+    assert any("C13 line-info section(s) stopped early" in w for w in d.warnings)
+
+
+def test_c13_bad_block_size_is_warned_about():
+    raw_names, offsets = names_stream(["", "main.c"])
+    checksums, entry_offsets = file_checksums([(offsets["main.c"], b"")])
+    lines_payload = line_entries(segment=1, base_offset=0x10,
+                                 file_entry=entry_offsets[0],
+                                 entries=[(0, 7, True)])
+    # Corrupt the block: claim 50 lines in a block that holds only 1 line entry.
+    broken_payload = lines_payload[:16] + struct.pack("<I", 50) + lines_payload[20:]
+    region = (subsection(c13.DEBUG_S_FILECHECKSUMS, checksums)
+              + subsection(c13.DEBUG_S_LINES, broken_payload))
+    pdb = _pdb(c13_region=region, raw_names=raw_names)
+    d = pdb.diagnose()
+    assert len(d.c13_truncations) == 1
+    assert any("C13 line-info section(s) stopped early" in w for w in d.warnings)
+
+
+def test_zero_padding_after_the_last_subsection_is_not_a_truncation():
+    """A producer that rounds the C13 region up leaves zero bytes after the
+    last subsection. Fewer than eight of them cannot be a header, and zero
+    ones are padding, not a cut: the lines are all there, so reporting them
+    as missing would be false."""
+    raw_names, offsets = names_stream(["", "main.c"])
+    checksums, entry_offsets = file_checksums([(offsets["main.c"], b"")])
+    lines_payload = line_entries(segment=1, base_offset=0x10,
+                                 file_entry=entry_offsets[0],
+                                 entries=[(0, 7, True)])
+    for pad in (1, 2, 3, 4, 7):
+        region = (subsection(c13.DEBUG_S_FILECHECKSUMS, checksums)
+                  + subsection(c13.DEBUG_S_LINES, lines_payload) + b"\x00" * pad)
+        pdb = _pdb(c13_region=region, raw_names=raw_names)
+        d = pdb.diagnose()
+        assert d.c13_truncations == [], f"{pad} zero byte(s) reported as damage"
+        assert [ln.line for ln in pdb.lines()] == [7]
+    # Bytes with something in them are a different matter.
+    region = (subsection(c13.DEBUG_S_FILECHECKSUMS, checksums)
+              + subsection(c13.DEBUG_S_LINES, lines_payload) + b"\xff\xff")
+    assert len(_pdb(c13_region=region, raw_names=raw_names).diagnose().c13_truncations) == 1
