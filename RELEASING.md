@@ -108,6 +108,16 @@ through the same gates and build, publishes to [TestPyPI](https://test.pypi.org/
 PyPI (an already-present version is skipped rather than failed), and stops before creating the
 GitHub release. Rehearse the first release after any change to the workflow.
 
+The tag has to be one cut after this workflow was added. A manual run reads the workflow, and
+checks out the guard script, from the ref it is given, so a tag from before neither carries them:
+`v0.5.0` and earlier cannot be rehearsed, and the failure does not say why. The same property is
+what makes those tags inert — re-pushing one triggers nothing.
+
+A rehearsal and the real release can both be in flight on one tag, which is how to rehearse a
+version before it goes out. Pushing the tag starts the real run, and a required reviewer on the
+`pypi` environment holds it at the publish job; rehearse from the same tag while it waits, then
+approve it, or reject it and leave the version number unused.
+
 ## When a release fails
 
 - **A gate failed before anything was published** (tag/version mismatch, missing changelog section,
