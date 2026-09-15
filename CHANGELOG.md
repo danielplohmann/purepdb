@@ -14,7 +14,22 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Pushing a `vX.Y.Z` tag now publishes the release. The workflow refuses to
+  continue unless the tag matches both version strings, `CHANGELOG.md` has a
+  section for it, the commit is on `main`, CI passed there, and a milestone
+  named for the tag, if one exists, has no open items; it then builds the sdist
+  and wheel in an isolated environment, installs the wheel into a clean
+  environment and runs it, uploads to PyPI through trusted publishing with
+  signed provenance, creates the GitHub release from that version's changelog
+  section, and closes that milestone. Pre-release tags (`v1.2.3rc1`) are marked
+  as such, and a manual run rehearses the same path against TestPyPI. Before,
+  publishing was `make publish` with an API token and the tag workflow only
+  attached artefacts. See `RELEASING.md`; the trusted publisher and the `pypi`
+  and `testpypi` environments are configured once by a maintainer.
+- A pull request that changes `purepdb/` or `pyproject.toml` has to add a
+  `CHANGELOG.md` entry or carry the `no-changelog` label; CI checks it.
 
 ## [0.5.0] - 2026-08-28
 

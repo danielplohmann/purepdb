@@ -10,6 +10,7 @@ The script is not shipped in the sdist, so these skip when it is absent.
 """
 
 import importlib.util
+import os
 import struct
 import subprocess
 import sys
@@ -247,7 +248,10 @@ def test_a_negative_diff_limit_is_refused(validator):
 def stub_tool(tmp_path):
     """A stand-in for llvm-pdbutil, so these test the guard under review and
     not whether an LLVM toolchain happens to be installed."""
-    tool = tmp_path / "stub-pdbutil"
+    # Since Python 3.12, shutil.which() on Windows resolves a file only under
+    # one of the PATHEXT extensions, even when handed an absolute path; a
+    # bare "stub-pdbutil" reads as absent there and the guard skips instead.
+    tool = tmp_path / ("stub-pdbutil.bat" if os.name == "nt" else "stub-pdbutil")
     tool.write_text("#!/bin/sh\nexit 0\n")
     tool.chmod(0o755)
     return str(tool)
