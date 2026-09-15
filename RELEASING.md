@@ -16,6 +16,32 @@ not cover.
 The version is declared in `pyproject.toml` (`[project].version`) and `purepdb/__init__.py` (`__version__`). The release workflow refuses a tag that does not
 match every one of them, so a bump that misses one fails before anything is published.
 
+## Supported Python versions
+
+purepdb supports Python 3.11 through 3.14, and CI runs every one of them: the floor and the
+ceiling on Linux, plus the floor on macOS and Windows.
+
+purepdb sits at the bottom of the ecosystem's dependency stack — SMDA depends on it as
+`purepdb>=0.3.0`, and MCRIT reaches it through SMDA — so this floor is the one that constrains
+everything above it rather than the one that follows. An installer resolves a dependency by the
+interpreter's version, so a purepdb that stopped supporting an interpreter SMDA still declares
+would be silently held back to its last compatible release under SMDA on that interpreter, with
+nothing reporting the downgrade. Nothing in the parser needs a version above 3.11: it reads a
+little-endian format with `struct` and `pathlib`.
+
+3.11 support ends at whichever of these comes first:
+
+- SMDA and MCRIT both move their floor to 3.12,
+- a runtime dependency drops 3.11 — purepdb has none today, so this is the least likely of the
+  three, or
+- 3.11 reaches end of life, in October 2027.
+
+The release that raises the floor says so in its `Removed` section, and the one before it carries
+a `Deprecated` notice. Raising it is not only metadata: Ruff's pyupgrade rules key on
+`target-version`, so the same change starts rewriting syntax to the new floor and stops being
+reversible by a one-line edit. The places that state it are `requires-python`, the classifiers,
+`[tool.ruff] target-version` and the `ci.yml` matrix.
+
 ## Changelog
 
 `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). It is the one
@@ -51,14 +77,20 @@ Pushing the tag is the release. `.github/workflows/publish-release.yml` then:
 
 1. **Verify** — refuses to continue unless the tag matches both version strings, `CHANGELOG.md`
    has a `## [X.Y.Z] - <date>` section (which becomes the release notes), the tagged commit is on
-   `main`, and CI passed on that commit.
+   `main`, CI passed on that commit, and the milestone named for the tag, if there is one, has no
+   open items.
 2. **Build** — builds the sdist and wheel in an isolated environment, checks their metadata with
    `twine check --strict`, and installs the wheel into a clean virtual environment to import it,
    check `__version__` and run the `purepdb` entry point.
 3. **Publish** — uploads to PyPI through [trusted publishing](https://docs.pypi.org/trusted-publishers/)
    with signed provenance attestations. No API token is stored anywhere.
 4. **Release** — creates the GitHub release for the tag with the changelog section as its body,
-   GitHub's generated contributor and PR list appended under it, and the sdist and wheel attached.
+   GitHub's generated contributor and PR list appended under it, and the sdist and wheel attached;
+   then closes the milestone.
+
+A milestone is optional here: name one `vX.Y.Z`, exactly as the tag is written, to have the gate
+see it. A tag with no milestone releases with a notice rather than a failure, so tracking a release
+this way is a choice per release and not a step that has to be remembered.
 
 Each gate fails with a message naming what to fix. Nothing has to be remembered at the console.
 
