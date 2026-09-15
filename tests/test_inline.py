@@ -414,58 +414,6 @@ def test_a_healthy_file_reports_no_unplaced_sites():
     assert d.warnings == [w for w in d.warnings if "inline site" not in w]
 
 
-def test_inline_site_in_stream_without_c13_signature():
-    """When a module symbol stream does not start with CV_SIGNATURE_C13,
-    no 4-byte signature is stripped and offsets start at 0.
-
-    On a well-formed stream this is not observable: a site is at least 12
-    bytes long and precedes the S_END its procedure's End names, so the
-    4-byte shift cannot flip `site_offset >= proc.end`. What the change is
-    for is the coordinate space itself -- one stream offset compared against
-    another -- and the second half of this test, a damaged End pointing two
-    bytes past the site, is the one input where the two spaces disagree.
-    """
-    from tests._synth import make_record
-
-    site = inline_site(inlinee=0x1000, annotations=bytes([0x0B, 0x04, 0x04, 0x03]))
-    proc = gproc32("outer", 1, 0x40, code_size=0x100)
-    end = make_record(codeview.S_END, b"")
-    end_offset = len(proc) + len(site)
-    module_records = proc[:8] + struct.pack("<I", end_offset) + proc[12:] + site + end
-
-    mods = module_info("main.obj", "main.obj", sym_stream=5,
-                       sym_byte_size=len(module_records))
-    streams = [
-        b"",
-        struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
-        b"",
-        dbi_stream(public_stream=6, symrecord_stream=7, module_list=mods,
-                   dbg_header=[0xFFFF] * 5 + [8]),
-        ipi_stream([("func", "helper")]),
-        module_records,
-        publics_hash_stream([]),
-        b"",
-        section_header(".text", 0x1000, 0x10000),
-    ]
-    pdb = PDB.from_bytes(build_msf(streams))
-    found = pdb.inline_sites()
-    assert len(found) == 1
-    assert found[0].name == "helper"
-    assert found[0].parent == "outer"
-
-    # A damaged End two bytes past the site's own offset: in the signature's
-    # coordinate space (+4) the site would read as outside its procedure and
-    # be dropped; in the stream's, where End was written, it is inside.
-    damaged = proc[:8] + struct.pack("<I", len(proc) + 2) + proc[12:] + site + end
-    streams[5] = damaged
-    mods = module_info("main.obj", "main.obj", sym_stream=5, sym_byte_size=len(damaged))
-    streams[3] = dbi_stream(public_stream=6, symrecord_stream=7, module_list=mods,
-                            dbg_header=[0xFFFF] * 5 + [8])
-    pdb = PDB.from_bytes(build_msf(streams))
-    assert [s.parent for s in pdb.inline_sites()] == ["outer"]
-    assert pdb.diagnose().unplaced_inline_sites == 0
-
-
 # --- the fused opcode, and separated code ------------------------------------
 
 def test_the_fused_length_does_not_move_the_cursor():

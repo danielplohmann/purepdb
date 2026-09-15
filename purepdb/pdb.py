@@ -42,7 +42,10 @@ STREAM_DBI = 3
 STREAM_IPI = 4
 
 # CodeView signature that prefixes each module symbol substream, and its size.
+CV_SIGNATURE_C7 = 0
+CV_SIGNATURE_C11 = 1
 CV_SIGNATURE_C13 = 4
+CV_SIGNATURES = frozenset({CV_SIGNATURE_C7, CV_SIGNATURE_C11, CV_SIGNATURE_C13})
 CV_SIGNATURE_SIZE = 4
 
 # The fixed header of the PDB Info stream: version, signature, age, GUID. It
@@ -344,6 +347,11 @@ class Diagnostics:
     read as far as the stream goes and the substreams after it as empty, so
     modules, section contributions, the section map or the debug-header slots
     may be missing."""
+    unrecognised_signatures: dict[int, int] = field(default_factory=dict)
+    """Module streams whose first word is not a CodeView signature (C7, C11 or
+    C13), counted by that word. Their records are not read: the layout after
+    an unknown signature is not known, and parsing the word as a record header
+    would misalign every record after it."""
 
     @property
     def truncated_streams(self) -> int:
@@ -457,6 +465,14 @@ class Diagnostics:
                     f"records. This is what /DEBUG:FASTLINK and some pre-2010 "
                     f"toolchains produce"
                 )
+        if self.unrecognised_signatures:
+            found = ", ".join(f"{sig:#x}x{n}" for sig, n in
+                              sorted(self.unrecognised_signatures.items()))
+            out.append(
+                f"{sum(self.unrecognised_signatures.values())} module "
+                f"stream(s) begin with a word that is not a CodeView signature "
+                f"(found: {found}); their symbols were not read"
+            )
         if self.public_records == 0:
             out.append(
                 "no public records in the symbol-record stream; thunks and "
@@ -844,20 +860,6 @@ class PDB:
             return publics
         return sorted(publics, key=lambda p: rank[p.record_offset])
 
-    def _module_symbol_bytes_and_offset(self, mod) -> tuple[bytes, int]:
-        """The symbol-record region of one module's stream, and the signature offset.
-
-        Returns (bytes, CV_SIGNATURE_SIZE) when a CV_SIGNATURE_C13 signature was
-        stripped, or (bytes, 0) otherwise.
-        """
-        if not mod.has_symbols or not self.msf.is_valid_stream(mod.sym_stream):
-            return b"", 0
-        raw = self.msf.read_stream(mod.sym_stream)
-        end = min(mod.sym_byte_size, len(raw))
-        if len(raw) >= 4 and struct.unpack_from("<I", raw, 0)[0] == CV_SIGNATURE_C13:
-            return raw[4:end], CV_SIGNATURE_SIZE
-        return raw[:end], 0
-
     def module_symbol_bytes(self, mod) -> bytes:
         """The symbol-record region of one module's stream, signature stripped.
 
@@ -865,9 +867,25 @@ class PDB:
         info`, and only the first region holds symbol records. `sym_byte_size`
         bounds it *including* the 4-byte signature, so parsing past it walks
         line-info bytes as if they were records. Returns b"" when the module
-        has no symbols.
+        has no symbols, or when its first word is not a signature purepdb
+        recognises -- `Diagnostics.unrecognised_signatures` counts those.
         """
-        return self._module_symbol_bytes_and_offset(mod)[0]
+        return self._module_symbols(mod)[1]
+
+    def _module_symbols(self, mod) -> tuple[int | None, bytes]:
+        """`module_symbol_bytes` and the unrecognised signature, if any."""
+        if not mod.has_symbols or not self.msf.is_valid_stream(mod.sym_stream):
+            return None, b""
+        raw = self.msf.read_stream(mod.sym_stream)
+        end = min(mod.sym_byte_size, len(raw))
+        # Too short to hold a signature: left for the record walk to report
+        # as a truncation.
+        if len(raw) < 4:
+            return None, raw[:end]
+        signature = struct.unpack_from("<I", raw, 0)[0]
+        if signature not in CV_SIGNATURES:
+            return signature, b""
+        return None, raw[4:end]
 
     def module_c13_bytes(self, mod) -> bytes:
         """The C13 line-info region of one module's stream.
@@ -1057,7 +1075,7 @@ class PDB:
         placed = 0
         unnamed = 0
         for mod in self.dbi.modules:
-            body, base_offset = self._module_symbol_bytes_and_offset(mod)
+            body = self.module_symbol_bytes(mod)
             if not body:
                 continue
             # Procs and sepcodes first, then sites. MSVC writes S_SEPCODE
@@ -1066,15 +1084,15 @@ class PDB:
             # the sites until the module ended was the previous cost: a
             # site always follows its procedure, so the second walk is
             # per-site state on top of the module's procs and chunks.
-            procs, chunks = self._collect_procs_and_chunks(body, base_offset)
+            procs, chunks = self._collect_procs_and_chunks(body)
             n_placed, n_unnamed, _malformed = self._place_sites_from_stream(
-                body, base_offset, ids, procs, chunks, out if keep else None)
+                body, ids, procs, chunks, out if keep else None)
             placed += n_placed
             unnamed += n_unnamed
         return out, placed, unnamed
 
     def _collect_procs_and_chunks(
-        self, body: bytes, base_offset: int,
+        self, body: bytes,
     ) -> tuple[list[tuple[int, codeview.ProcSymbol]],
                dict[tuple[int, int], list[codeview.SepCode]]]:
         procs: list[tuple[int, codeview.ProcSymbol]] = []
@@ -1086,7 +1104,7 @@ class PDB:
                     chunks.setdefault(
                         (sep.parent_segment, sep.parent_offset), []).append(sep)
                 else:
-                    procs.append((rec.offset + base_offset,
+                    procs.append((rec.offset + CV_SIGNATURE_SIZE,
                                   codeview.parse_proc(rec.kind, rec.payload)))
             except EOFError:
                 continue
@@ -1095,7 +1113,6 @@ class PDB:
     def _place_sites_from_stream(
         self,
         body: bytes,
-        base_offset: int,
         ids: IdTable | None,
         procs: list[tuple[int, codeview.ProcSymbol]],
         chunks: dict[tuple[int, int], list[codeview.SepCode]],
@@ -1121,7 +1138,7 @@ class PDB:
                 continue
             n_p, n_u = self._place_one_site(
                 name_of, procs, starts, chunks,
-                rec.offset + base_offset, rec.kind, site, out)
+                rec.offset + CV_SIGNATURE_SIZE, rec.kind, site, out)
             placed += n_p
             unnamed += n_u
         return placed, unnamed, malformed
@@ -1411,6 +1428,7 @@ class PDB:
         malformed_inline = 0
         line_bytes = 0
         c13_truncations: list[tuple[str, c13.C13Truncation]] = []
+        signatures: dict[int, int] = {}
         proc_records = 0
         placed_sites = 0
         unnamed_sites = 0
@@ -1430,9 +1448,8 @@ class PDB:
                 # The truncation reports come from re-decoding every
                 # DEBUG_S_LINES payload here and discarding the entries:
                 # 18ms of the 180ms diagnose() costs on the 3 MB sqlite
-                # fixture. Deliberate, for the same reason
-                # `count_malformed_records` runs twice per module below --
-                # `parse_lines` is the only implementation of the block walk,
+                # fixture. Deliberate: `parse_lines` is the only
+                # implementation of the block walk,
                 # and a header-only twin kept beside it would drift from it.
                 # `lines()` cannot be reused for this: it is a generator a
                 # caller may never consume, and it resolves file names,
@@ -1443,7 +1460,9 @@ class PDB:
                         c13.parse_lines(sub.payload, truncation=mod_c13_report)
                 for t in mod_c13_report:
                     c13_truncations.append((f"module {mod.index} ({mod.module_name})", t))
-            body, base_offset = self._module_symbol_bytes_and_offset(mod)
+            signature, body = self._module_symbols(mod)
+            if signature is not None:
+                signatures[signature] = signatures.get(signature, 0) + 1
             if not body:
                 continue
             with_symbols += 1
@@ -1460,7 +1479,7 @@ class PDB:
             chunks: dict[tuple[int, int], list[codeview.SepCode]] = {}
             for offset, _kind, decoded in survey.kept:
                 if isinstance(decoded, codeview.ProcSymbol):
-                    procs.append((offset + base_offset, decoded))
+                    procs.append((offset + CV_SIGNATURE_SIZE, decoded))
                 elif isinstance(decoded, codeview.SepCode):
                     chunks.setdefault(
                         (decoded.parent_segment, decoded.parent_offset),
@@ -1470,7 +1489,7 @@ class PDB:
             # walk already kept. Holding them in `survey.kept` was the
             # per-module peak on xul.pdb.
             n_placed, n_unnamed, n_mal_inline = self._place_sites_from_stream(
-                body, base_offset, ids, procs, chunks, None)
+                body, ids, procs, chunks, None)
             placed_sites += n_placed
             unnamed_sites += n_unnamed
             malformed += n_mal_inline
@@ -1558,6 +1577,7 @@ class PDB:
             linker_version=self.dbi.toolchain_version,
             thread_local_records=thread_locals,
             c13_truncations=c13_truncations,
+            unrecognised_signatures=signatures,
         )
 
     def _is_code(self, segment: int) -> bool:

@@ -6,6 +6,8 @@ the point of these tests is that the *explanation* appears.
 
 import struct
 
+import pytest
+
 from purepdb import PDB
 from tests._synth import (
     build_msf,
@@ -24,9 +26,10 @@ from tests._synth import (
 UNKNOWN_KIND = 0x1FFF
 
 
-def _pdb(*, module_records=b"", pub_records=(), section_stream=6, flags=0):
+def _pdb(*, module_records=b"", pub_records=(), section_stream=6, flags=0,
+         signature=4):
     symrecords = b"".join(pub_records)
-    module_syms = module_sym_stream(module_records)
+    module_syms = module_sym_stream(module_records, signature)
     mods = module_info("main.obj", "main.obj", sym_stream=5,
                        sym_byte_size=len(module_syms))
     streams = [
@@ -140,6 +143,31 @@ def test_missing_pdb_info_stream_is_explained():
     assert any("the PDB Info stream cannot be read" in w for w in d.warnings)
     assert pdb.string_table() is None
     assert list(pdb.lines()) == []
+
+
+@pytest.mark.parametrize("signature", [0, 1, 4], ids=["C7", "C11", "C13"])
+def test_every_codeview_signature_is_stripped(signature):
+    pdb = _pdb(module_records=gproc32("main", 1, 0x10),
+               pub_records=[pub32("main", 1, 0x10)], signature=signature)
+    assert [p.name for p in pdb.module_procs()] == ["main"]
+    d = pdb.diagnose()
+    assert d.unrecognised_signatures == {}
+    assert d.warnings == []
+
+
+def test_an_unrecognised_signature_is_not_parsed_as_a_record():
+    # 0x1110_0010 read as a header is a 16-byte S_GPROC32, so a reader that
+    # walked past the unknown word would find a record in it.
+    pdb = _pdb(module_records=gproc32("main", 1, 0x10),
+               pub_records=[pub32("main", 1, 0x10)], signature=0x1110_0010)
+    assert pdb.module_procs() == []
+    d = pdb.diagnose()
+    assert d.modules_with_symbols == 0
+    assert d.malformed_records == 0
+    assert d.unrecognised_signatures == {0x1110_0010: 1}
+    warning = "\n".join(d.warnings)
+    assert "0x11100010" in warning, "the value found must be named"
+    assert "not a CodeView signature" in warning
 
 
 def _publics_only(*, flags=0, build_number=0, modules=1):
