@@ -31,6 +31,8 @@ S_LPROC32 = 0x110F     # local (static) procedure start
 S_GPROC32 = 0x1110     # global procedure start
 S_LPROC32_ID = 0x1146  # same layout, type index is an ID
 S_GPROC32_ID = 0x1147
+S_LPROC32_DPC = 0x1155     # same layout again: a procedure compiled for a DPC
+S_LPROC32_DPC_ID = 0x1156  # (C++ AMP) target, which cvinfo.h lists as PROCSYM32
 S_END = 0x0006
 S_PROC_ID_END = 0x114F
 
@@ -43,7 +45,8 @@ S_GTHREAD32 = 0x1113   # ... and external linkage
 S_PROCREF = 0x1125     # globals index entry for a global procedure
 S_LPROCREF = 0x1127    # ... and for a static one
 
-PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID})
+PROC_KINDS = frozenset({S_LPROC32, S_GPROC32, S_LPROC32_ID, S_GPROC32_ID,
+                        S_LPROC32_DPC, S_LPROC32_DPC_ID})
 _DATA_KINDS = frozenset({S_LDATA32, S_GDATA32})
 THREAD_KINDS = frozenset({S_LTHREAD32, S_GTHREAD32})
 PROC_REF_KINDS = frozenset({S_PROCREF, S_LPROCREF})
@@ -60,13 +63,40 @@ S_BPREL32 = 0x110B
 S_REGREL32 = 0x1111
 S_TRAMPOLINE = 0x112C
 S_FRAMEPROC = 0x1012
+S_ANNOTATION = 0x1019
+S_SECTION = 0x1136
+S_COFFGROUP = 0x1137
 S_EXPORT = 0x1138
 S_CALLSITEINFO = 0x1139
+S_COMPILE2 = 0x1116   # what S_COMPILE3 replaced: the same facts, three-part versions
 S_COMPILE3 = 0x113C
 S_ENVBLOCK = 0x113D
+COMPILE_KINDS = frozenset({S_COMPILE2, S_COMPILE3})
 S_LOCAL = 0x113E
+S_DEFRANGE = 0x113F
+S_DEFRANGE_SUBFIELD = 0x1140
+S_DEFRANGE_REGISTER = 0x1141
+S_DEFRANGE_FRAMEPOINTER_REL = 0x1142
+S_DEFRANGE_SUBFIELD_REGISTER = 0x1143
+S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE = 0x1144
+S_DEFRANGE_REGISTER_REL = 0x1145
+S_BUILDINFO = 0x114C
+S_REGISTER = 0x1106
+S_UNAMESPACE = 0x1124
+S_FRAMECOOKIE = 0x113A
+S_FILESTATIC = 0x1153
+S_ARMSWITCHTABLE = 0x1159
+S_CALLEES = 0x115A
+S_CALLERS = 0x115B
+S_POGODATA = 0x115C
+S_HEAPALLOCSITE = 0x115E
+S_FASTLINK = 0x1167
 S_INLINESITE = 0x114D
 S_INLINESITE_END = 0x114E
+S_INLINESITE2 = 0x115D  # S_INLINESITE plus an invocation count before the annotations
+S_SEPCODE = 0x1132      # a code range split off from its procedure (hot/cold)
+S_INLINEES = 0x1168
+INLINE_SITE_KINDS = frozenset({S_INLINESITE, S_INLINESITE2})
 
 # Managed (.NET) code. A Windows-format PDB for a managed assembly describes
 # methods with these instead of S_*PROC32, keyed by metadata token rather than
@@ -77,6 +107,15 @@ S_GMANPROC = 0x112A
 S_LMANPROC = 0x112B
 
 MANAGED_PROC_KINDS = frozenset({S_GMANPROC, S_LMANPROC})
+
+# One-kind sets for the extractors that want a single kind, so they can hand
+# `iter_records` a filter rather than test every record themselves.
+_PUBLIC_KINDS = frozenset({S_PUB32})
+_THUNK_KINDS = frozenset({S_THUNK32})
+_LABEL_KINDS = frozenset({S_LABEL32})
+_TRAMPOLINE_KINDS = frozenset({S_TRAMPOLINE})
+_CONSTANT_KINDS = frozenset({S_CONSTANT})
+_UDT_KINDS = frozenset({S_UDT})
 
 KIND_NAMES: dict[int, str] = {
     S_END: "S_END",
@@ -102,12 +141,39 @@ KIND_NAMES: dict[int, str] = {
     S_PROCREF: "S_PROCREF",
     S_LPROCREF: "S_LPROCREF",
     S_TRAMPOLINE: "S_TRAMPOLINE",
+    S_COMPILE2: "S_COMPILE2",
     S_COMPILE3: "S_COMPILE3",
     S_ENVBLOCK: "S_ENVBLOCK",
     S_LOCAL: "S_LOCAL",
+    S_ANNOTATION: "S_ANNOTATION",
+    S_SECTION: "S_SECTION",
+    S_COFFGROUP: "S_COFFGROUP",
+    S_DEFRANGE: "S_DEFRANGE",
+    S_DEFRANGE_SUBFIELD: "S_DEFRANGE_SUBFIELD",
+    S_DEFRANGE_REGISTER: "S_DEFRANGE_REGISTER",
+    S_DEFRANGE_FRAMEPOINTER_REL: "S_DEFRANGE_FRAMEPOINTER_REL",
+    S_DEFRANGE_SUBFIELD_REGISTER: "S_DEFRANGE_SUBFIELD_REGISTER",
+    S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE: "S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE",
+    S_DEFRANGE_REGISTER_REL: "S_DEFRANGE_REGISTER_REL",
+    S_BUILDINFO: "S_BUILDINFO",
+    S_REGISTER: "S_REGISTER",
+    S_UNAMESPACE: "S_UNAMESPACE",
+    S_FRAMECOOKIE: "S_FRAMECOOKIE",
+    S_FILESTATIC: "S_FILESTATIC",
+    S_ARMSWITCHTABLE: "S_ARMSWITCHTABLE",
+    S_CALLEES: "S_CALLEES",
+    S_CALLERS: "S_CALLERS",
+    S_POGODATA: "S_POGODATA",
+    S_HEAPALLOCSITE: "S_HEAPALLOCSITE",
+    S_FASTLINK: "S_FASTLINK",
+    S_INLINEES: "S_INLINEES",
     S_INLINESITE: "S_INLINESITE",
+    S_INLINESITE2: "S_INLINESITE2",
+    S_SEPCODE: "S_SEPCODE",
     S_LPROC32_ID: "S_LPROC32_ID",
     S_GPROC32_ID: "S_GPROC32_ID",
+    S_LPROC32_DPC: "S_LPROC32_DPC",
+    S_LPROC32_DPC_ID: "S_LPROC32_DPC_ID",
     S_PROC_ID_END: "S_PROC_ID_END",
     S_MANSLOT: "S_MANSLOT",
     S_GMANPROC: "S_GMANPROC",
@@ -321,24 +387,28 @@ BA_OP_CHANGE_COLUMN_END = 13
 _BA_TWO_OPERANDS = BA_OP_CHANGE_CODE_LENGTH_AND_CODE_OFFSET
 
 
-def _uncompress(r: Reader) -> int | None:
-    """Read one compressed unsigned integer.
+def _uncompress_at(data: bytes, pos: int) -> tuple[int | None, int]:
+    """Read one compressed unsigned integer at `pos`; the value and the
+    position after it.
 
     The top bits of the first byte give the width: 1, 2 or 4 bytes. None for
     the 4th encoding, which is not defined -- and, since operand widths are
     what keep the stream in step, means the rest cannot be read either.
+    Raises IndexError past the end of `data`, which the caller treats the way
+    it treats a Reader's EOFError: the walk ends.
     """
-    b0 = r.u8()
+    b0 = data[pos]
     if b0 & 0x80 == 0:
-        return b0
+        return b0, pos + 1
     if b0 & 0xC0 == 0x80:
-        return ((b0 & 0x3F) << 8) | r.u8()
+        return ((b0 & 0x3F) << 8) | data[pos + 1], pos + 2
     if b0 & 0xE0 == 0xC0:
-        return ((b0 & 0x1F) << 24) | (r.u8() << 16) | (r.u8() << 8) | r.u8()
-    return None
+        return (((b0 & 0x1F) << 24) | (data[pos + 1] << 16)
+                | (data[pos + 2] << 8) | data[pos + 3]), pos + 4
+    return None, pos + 1
 
 
-@dataclass
+@dataclass(slots=True)
 class InlineSite:
     """S_INLINESITE: a function body the compiler pasted into another one.
 
@@ -346,33 +416,105 @@ class InlineSite:
     enclosing procedure*, because that is how the annotations express them.
     `inlinee` is an item id into the IPI stream, not a name; `purepdb.ipi`
     turns it into one.
+
+    `separated_ranges` are `(chunk, offset, length)` triples for code the
+    annotations place in one of the procedure's separated code chunks -- the
+    cold half of a hot/cold split, which MSVC's profile-guided optimiser
+    writes as an `S_SEPCODE` record after the procedure's scope. `chunk` is
+    1-based in the order those records appear; the offset is relative to that
+    chunk's start, not the procedure's. Resolving one needs the module's
+    `S_SEPCODE` records, so the two lists are kept apart.
     """
 
     inlinee: int
     ranges: list[tuple[int, int]] = field(default_factory=list)
+    separated_ranges: list[tuple[int, int, int]] = field(default_factory=list)
 
     @property
     def code_size(self) -> int:
-        return sum(length for _offset, length in self.ranges)
+        return (sum(length for _offset, length in self.ranges)
+                + sum(length for _chunk, _offset, length in self.separated_ranges))
 
 
-def parse_inline_site(payload: bytes) -> InlineSite:
+@dataclass
+class SepCode:
+    """S_SEPCODE: a range of a procedure's code moved away from its body.
+
+    Profile-guided optimisation splits a function into a hot part, which
+    stays where the procedure record says, and a cold part, which the linker
+    lays out elsewhere. This names the cold part: its own `segment:offset`
+    and `length`, and the `segment:offset` of the procedure it belongs to.
+    The record sits after the procedure's `S_END` rather than inside its
+    scope, so the parent address is the link.
+    """
+
+    segment: int
+    offset: int
+    length: int
+    flags: int
+    parent_segment: int
+    parent_offset: int
+
+
+def parse_sepcode(payload: bytes) -> SepCode:
+    r = Reader(payload)
+    r.u32()  # Parent
+    r.u32()  # End
+    length = r.u32()
+    flags = r.u32()
+    offset = r.u32()
+    parent_offset = r.u32()
+    segment = r.u16()
+    parent_segment = r.u16()
+    return SepCode(segment=segment, offset=offset, length=length, flags=flags,
+                   parent_segment=parent_segment, parent_offset=parent_offset)
+
+
+def extract_sepcodes(data: bytes) -> list[SepCode]:
+    """S_SEPCODE records, in stream order -- which is what numbers them."""
+    return _decoded(parse_sepcode,
+                    (r for r in iter_records(data) if r.kind == S_SEPCODE))
+
+
+_INLINE_FIXED = struct.Struct("<III")  # Parent, End, Inlinee
+assert _INLINE_FIXED.size == 12
+
+
+def parse_inline_site(payload: bytes, kind: int = S_INLINESITE) -> InlineSite:
     """Decode the record and walk its annotations for the code it covers.
 
     A malformed or unrecognised annotation ends the walk: operand widths are
     what keep the stream in step, so there is nothing sensible to read past
     one. The ranges found before it are still real and are kept.
+
+    `S_INLINESITE2` is the same record with an invocation count between the
+    inlinee and the annotations; the count is stepped over, since how often a
+    body was inlined is not where it is.
+
+    The annotations are walked with an integer cursor over the payload rather
+    than a Reader, and the one-byte operand -- nearly all of them -- is read
+    inline: there are 1.6 million of these records in a 355 MB node.pdb,
+    with nine operand bytes each on average, and a method call per byte was
+    most of the cost of both `inline_sites()` and `diagnose()` on it.
     """
-    r = Reader(payload)
-    r.u32()  # Parent
-    r.u32()  # End
-    inlinee = r.u32()
+    fixed = _INLINE_FIXED.size + (4 if kind == S_INLINESITE2 else 0)
+    if len(payload) < fixed:
+        raise EOFError(f"read past end of buffer (need {fixed}, have {len(payload)})")
+    _parent, _end, inlinee = _INLINE_FIXED.unpack_from(payload, 0)
 
     site = InlineSite(inlinee=inlinee)
+    ranges = site.ranges
+    separated = site.separated_ranges
     code_offset = 0
+    chunk = 0  # 0 is the procedure's own body; n is its n'th separated chunk
+    pos = fixed
+    end = len(payload)
     try:
-        while not r.eof():
-            opcode = _uncompress(r)
+        while pos < end:
+            opcode = payload[pos]
+            pos += 1
+            if opcode & 0x80:
+                opcode, pos = _uncompress_at(payload, pos - 1)
             if opcode is None or opcode == BA_OP_INVALID:
                 break
             if opcode > BA_OP_CHANGE_COLUMN_END:
@@ -382,39 +524,68 @@ def parse_inline_site(payload: bytes) -> InlineSite:
                 # would resynchronise on whatever happened to follow and
                 # fabricate ranges from it.
                 break
-            first = _uncompress(r)
-            if first is None:
-                break
-            # The cursor is a running offset from the procedure's start. A
-            # length both closes a range and moves the cursor past it, so the
-            # next offset delta is measured from the end of the last range.
+            first = payload[pos]
+            pos += 1
+            if first & 0x80:
+                first, pos = _uncompress_at(payload, pos - 1)
+                if first is None:
+                    break
+            # The cursor is a running offset from the start of the chunk the
+            # ranges are in. The two opcodes that close a range treat it
+            # differently, and the difference is not a matter of taste: a
+            # standalone length is "length of code, default next start" in
+            # cvinfo.h, so the next delta is measured from the end of the
+            # range it closed; the length fused into
+            # ChangeCodeLengthAndCodeOffset does *not* move the cursor, and
+            # the next delta is measured from where that range began. Treating
+            # the two alike -- which this parser did until 0.6.0 -- placed the
+            # second and later ranges of an MSVC site past the end of the
+            # procedure 5582 times in one python312.pdb, and past the end of
+            # the cold chunk they were in; measured from the range's start,
+            # none of 79187 ranges overflows or overlaps. It is also the
+            # reading llvm-pdbutil has always used.
             if opcode == _BA_TWO_OPERANDS:
                 # The only opcode taking two operands, handled here so the
                 # second one is read and used in the same place.
-                second = _uncompress(r)
+                second, pos = _uncompress_at(payload, pos)
                 if second is None:
                     break
                 code_offset += second
-                site.ranges.append((code_offset, first))
-                code_offset += first
+                if chunk == 0:
+                    ranges.append((code_offset, first))
+                else:
+                    separated.append((chunk, code_offset, first))
             elif opcode in (BA_OP_CODE_OFFSET, BA_OP_CHANGE_CODE_OFFSET):
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_AND_LINE_OFFSET:
                 # One operand packs both: the code delta in the low 4 bits.
                 code_offset += first & 0xF
             elif opcode == BA_OP_CHANGE_CODE_LENGTH:
-                site.ranges.append((code_offset, first))
+                if chunk == 0:
+                    ranges.append((code_offset, first))
+                else:
+                    separated.append((chunk, code_offset, first))
                 code_offset += first
             elif opcode == BA_OP_CHANGE_CODE_OFFSET_BASE:
-                # Rebases the cursor rather than advancing it. Nothing in the
-                # corpus emits it, so the rebase is unverified -- and every
-                # range after it would be measured from a base we did not
-                # apply. Stop, the way an undecodable operand does: the ranges
-                # already found are real, and a short answer beats a wrong one.
-                break
-    except EOFError:
+                # "nth separated code chunk (main code chunk == 0)", per
+                # cvinfo.h: the ranges that follow are in the procedure's
+                # n'th S_SEPCODE chunk, measured from its start. MSVC's
+                # profile-guided optimiser emits it first thing for a body
+                # inlined into the cold half of a split function -- 21 of
+                # the 103 sites in a python 3.12 _bz2.pdb -- and every one
+                # of those used to be dropped as describing no code.
+                chunk = first
+                code_offset = 0
+    except IndexError:
+        # An operand cut off by the end of the payload, which is what a
+        # Reader reported as EOFError: the ranges already found stand.
         pass
     return site
+
+
+def parse_inline_site_record(kind: int, payload: bytes) -> InlineSite:
+    """`parse_inline_site` in the `(kind, payload)` convention the dispatch uses."""
+    return parse_inline_site(payload, kind)
 
 
 def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
@@ -425,11 +596,9 @@ def extract_inline_sites(data: bytes) -> list[tuple[int, InlineSite]]:
     otherwise raise out of the public API.
     """
     out = []
-    for rec in iter_records(data):
-        if rec.kind != S_INLINESITE:
-            continue
+    for rec in iter_records(data, kinds=INLINE_SITE_KINDS):
         try:
-            out.append((rec.offset, parse_inline_site(rec.payload)))
+            out.append((rec.offset, parse_inline_site(rec.payload, rec.kind)))
         except EOFError:
             continue
     return out
@@ -471,8 +640,11 @@ class ThreadLocalSymbol:
         return self.kind == S_GTHREAD32
 
 
-@dataclass
+@dataclass(slots=True)
 class RawRecord:
+    """One record as the walk found it. Slotted: one is built per record the
+    caller asked for, which for `count_kinds` is every record in the file."""
+
     kind: int
     payload: bytes
     offset: int = 0  # byte offset of the record's length field within the stream
@@ -495,12 +667,28 @@ class Truncation:
     bytes, and callers should say so differently."""
 
 
+_RECORD_HEADER = struct.Struct("<HH")  # RecordLen, RecordKind
+assert _RECORD_HEADER.size == 4
+
+
 def iter_records(data: bytes, start: int = 0, *,
+                 kinds: frozenset[int] | None = None,
                  truncation: list[Truncation] | None = None):
     """Yield RawRecord for every length-prefixed record in `data`.
 
     Records are padded/aligned by their length field, so we trust RecordLen
     for advancing rather than re-parsing each kind.
+
+    `kinds` narrows what is *yielded*, not what is walked: every record is
+    still stepped over by its length, so the walk stays in sync and the
+    truncation report is the same whatever the filter. What it saves is a
+    payload slice and a RawRecord per record the caller would have discarded
+    on sight -- which, for an extractor after one kind, is nearly all of them.
+    This walk is the hottest loop in the parser (three quarters of the time
+    of every listing on a 3 MB file before it was written this way), which is
+    why it reads the header with one `unpack_from` rather than through a
+    `Reader`: the cursor object cost two slices, two unpacks and two bounds
+    checks per record for a header that is one struct.
 
     A malformed length ends the walk instead of raising, because a caller may
     legitimately be looking at padding rather than at records. That leaves the
@@ -508,33 +696,34 @@ def iter_records(data: bytes, start: int = 0, *,
     as `truncation` to be told: a single `Truncation` is appended to it when
     the walk stops early, and nothing is appended when the buffer is consumed.
     """
-    r = Reader(data, start)
-    while r.remaining() >= 4:
-        rec_start = r.pos
-        rec_len = r.u16()
+    unpack = _RECORD_HEADER.unpack_from
+    end = len(data)
+    pos = start
+    while end - pos >= 4:
+        rec_len, kind = unpack(data, pos)
         if rec_len < 2:
             if truncation is not None:
                 truncation.append(Truncation(
-                    rec_start,
-                    f"record length {rec_len} is below the 2-byte minimum",
+                    pos, f"record length {rec_len} is below the 2-byte minimum",
                 ))
             return
-        kind = r.u16()
         payload_len = rec_len - 2
-        if r.remaining() < payload_len:
+        body = pos + 4
+        if end - body < payload_len:
             if truncation is not None:
                 truncation.append(Truncation(
-                    rec_start,
+                    pos,
                     f"record length {rec_len} runs "
-                    f"{payload_len - r.remaining()} bytes past the end of the "
-                    f"{len(data)}-byte stream",
+                    f"{payload_len - (end - body)} bytes past the end of the "
+                    f"{end}-byte stream",
                 ))
             return
-        payload = r.bytes(payload_len)
-        yield RawRecord(kind, payload, rec_start)
-    if r.remaining() > 0 and truncation is not None:
+        if kinds is None or kind in kinds:
+            yield RawRecord(kind, data[body : body + payload_len], pos)
+        pos = body + payload_len
+    if end - pos > 0 and truncation is not None:
         truncation.append(Truncation(
-            r.pos, f"{r.remaining()} trailing bytes are too few for a record header",
+            pos, f"{end - pos} trailing bytes are too few for a record header",
             ragged_tail=True,
         ))
 
@@ -589,15 +778,85 @@ def count_malformed_records(data: bytes, kind: int | None = None) -> int:
     `kind` narrows the count to one kind, which is how a caller separates a
     record it could not parse from one it parsed and could not use.
     """
+    # Only a dispatched kind can be malformed in this sense, so the walk is
+    # asked for those alone; an undispatched record costs a header read and
+    # nothing else.
+    wanted = DISPATCHED_KINDS if kind is None else frozenset({kind})
     total = 0
-    for rec in iter_records(data):
-        if kind is not None and rec.kind != kind:
-            continue
+    for rec in iter_records(data, kinds=wanted):
         try:
             parse_record(rec.kind, rec.payload)
         except EOFError:
             total += 1
     return total
+
+
+@dataclass
+class RecordSurvey:
+    """Everything one walk of a record stream can say about it, for diagnostics.
+
+    `count_kinds`, `count_malformed_records` and `find_truncation` each answer
+    one question with one walk; `diagnose()` asks all three of every module
+    stream, then walked them again for the procedures and inline sites. This
+    is the one walk that answers all of it, so a 400 MB file is read once.
+    """
+
+    kinds: collections.Counter[int] = field(default_factory=collections.Counter)
+    malformed: collections.Counter[int] = field(default_factory=collections.Counter)
+    """Per kind: records shorter than the kind requires, among the kinds
+    this walk decoded. When `survey_records` is called without `parse=`,
+    that is every dispatched kind, the total is what
+    `count_malformed_records` answers, and the entry for a kind is what
+    the same function narrowed to that kind answers. A `parse=` subset
+    only counts those kinds; `diagnose()` adds the inline-site count
+    from the second walk that places them."""
+    kept: list[tuple[int, int, object]] = field(default_factory=list)
+    """`(offset, kind, decoded)` for the kinds the caller asked to keep, in
+    stream order. Only records that decoded are here; a short one is in
+    `malformed` instead, which keeps the two disjoint the way the extractors
+    and `count_malformed_records` keep them."""
+
+
+def survey_records(data: bytes, *, keep: frozenset[int] = frozenset(),
+                   truncation: list[Truncation] | None = None,
+                   parse: frozenset[int] | None = None) -> RecordSurvey:
+    """Count every record by kind, try dispatched parsers, keep some.
+
+    When `parse` is omitted, every dispatched kind is tried, which is
+    what makes `malformed` exactly `count_malformed_records`'s answer,
+    and it means a procedure or an inline site the caller wants has
+    already been decoded by the time it is asked for, so `keep` costs
+    nothing more than holding the result.
+
+    `parse` narrows which kinds are decoded (and therefore which can be
+    counted malformed). The histogram still counts every record.
+    `diagnose()` uses this to skip inline sites: they are parsed on a
+    later walk so the millions in one xul.pdb module are not held next
+    to the procs and sepcodes they need to be placed against, and that
+    walk's malformed count is added to the survey's.
+    """
+    survey = RecordSurvey()
+    kinds = survey.kinds
+    malformed = survey.malformed
+    kept = survey.kept
+    parsers = _RECORD_PARSERS
+    parse_kinds = DISPATCHED_KINDS if parse is None else parse
+    for rec in iter_records(data, truncation=truncation):
+        kind = rec.kind
+        kinds[kind] += 1
+        if kind not in parse_kinds:
+            continue
+        parser = parsers.get(kind)
+        if parser is None:
+            continue
+        try:
+            decoded = parser(kind, rec.payload)
+        except EOFError:
+            malformed[kind] += 1
+            continue
+        if kind in keep:
+            kept.append((rec.offset, kind, decoded))
+    return survey
 
 
 def find_truncation(data: bytes, start: int = 0) -> Truncation | None:
@@ -608,28 +867,63 @@ def find_truncation(data: bytes, start: int = 0) -> Truncation | None:
     return report[0] if report else None
 
 
+# The fixed portion of each named record, as one struct. A parser reads it
+# with a single unpack_from and finds the name's NUL with one `find`, rather
+# than walking a Reader field by field -- eight or nine method calls per
+# record, and parse_proc alone runs 35k times on a 20 MB PDB. The failure
+# contract is the Reader's: EOFError when the payload is shorter than the
+# fixed portion or the name has no terminator, which is what the extractors
+# and `count_malformed_records` catch.
+_PUBLIC_FIXED = struct.Struct("<IIH")          # Flags, Offset, Segment
+assert _PUBLIC_FIXED.size == 10
+_PROC_FIXED = struct.Struct(
+    "<I"   # Parent
+    "I"    # End
+    "I"    # Next
+    "I"    # CodeSize
+    "I"    # DbgStart
+    "I"    # DbgEnd
+    "I"    # FunctionType
+    "I"    # CodeOffset
+    "H"    # Segment
+    "B"    # Flags
+)
+assert _PROC_FIXED.size == 35
+_PROC_REF_FIXED = struct.Struct("<IIH")        # SumName, SymOffset, Module
+assert _PROC_REF_FIXED.size == 10
+_DATA_FIXED = struct.Struct("<IIH")            # Type, DataOffset, Segment
+assert _DATA_FIXED.size == 10
+_LABEL_FIXED = struct.Struct("<IHB")           # CodeOffset, Segment, Flags
+assert _LABEL_FIXED.size == 7
+_THUNK_FIXED = struct.Struct("<IIIIHHB")  # Parent, End, Next, Offset, Segment, Length, Ordinal
+assert _THUNK_FIXED.size == 21
+_UDT_FIXED = struct.Struct("<I")               # Type
+assert _UDT_FIXED.size == 4
+_COMPILE3_FIXED = struct.Struct("<IH4H4H")     # Flags, Machine, frontend x4, backend x4
+assert _COMPILE3_FIXED.size == 22
+_TRAMPOLINE = struct.Struct("<HHIIHH")   # Type, Size, ThunkOff, TargetOff, ThunkSect, TargetSect
+assert _TRAMPOLINE.size == 16
+
+
+def _fixed_then_name(payload: bytes, fixed: struct.Struct) -> tuple[tuple, str]:
+    """The fixed fields, then the NUL-terminated name that follows them."""
+    size = fixed.size
+    if len(payload) < size:
+        raise EOFError(f"read past end of buffer (need {size}, have {len(payload)})")
+    end = payload.find(b"\x00", size)
+    if end == -1:
+        raise EOFError("unterminated C string")
+    return fixed.unpack_from(payload, 0), payload[size:end].decode("utf-8", errors="replace")
+
+
 def parse_public(payload: bytes) -> PublicSymbol:
-    r = Reader(payload)
-    flags = r.u32()
-    offset = r.u32()
-    segment = r.u16()
-    name = r.cstring()
+    (flags, offset, segment), name = _fixed_then_name(payload, _PUBLIC_FIXED)
     return PublicSymbol(name=name, segment=segment, offset=offset, flags=flags)
 
 
 def parse_proc(kind: int, payload: bytes) -> ProcSymbol:
-    r = Reader(payload)
-    r.u32()  # Parent
-    end = r.u32()
-    r.u32()  # Next
-    code_size = r.u32()
-    r.u32()  # DbgStart
-    r.u32()  # DbgEnd
-    type_index = r.u32()
-    offset = r.u32()
-    segment = r.u16()
-    r.u8()   # ProcSymFlags
-    name = r.cstring()
+    (_parent, end, _next, code_size, _dbg_start, _dbg_end, type_index, offset,
+     segment, _flags), name = _fixed_then_name(payload, _PROC_FIXED)
     return ProcSymbol(
         name=name,
         segment=segment,
@@ -642,11 +936,10 @@ def parse_proc(kind: int, payload: bytes) -> ProcSymbol:
 
 
 def parse_proc_ref(kind: int, payload: bytes) -> ProcRef:
-    r = Reader(payload)
-    r.u32()  # SumName, a name hash; zero in everything we have seen
-    sym_offset = r.u32()
-    module = r.u16()  # 1-based
-    return ProcRef(name=r.cstring(), module_index=module - 1,
+    # SumName is a name hash, zero in everything we have seen; Module is
+    # 1-based.
+    (_sum_name, sym_offset, module), name = _fixed_then_name(payload, _PROC_REF_FIXED)
+    return ProcRef(name=name, module_index=module - 1,
                    sym_offset=sym_offset, kind=kind)
 
 
@@ -658,9 +951,7 @@ def extract_proc_refs(data: bytes) -> list[ProcRef]:
     See `purepdb.gsi`.
     """
     out: list[ProcRef] = []
-    for rec in iter_records(data):
-        if rec.kind not in PROC_REF_KINDS:
-            continue
+    for rec in iter_records(data, kinds=PROC_REF_KINDS):
         try:
             out.append(parse_proc_ref(rec.kind, rec.payload))
         except EOFError:
@@ -680,16 +971,13 @@ def parse_constant(payload: bytes) -> Constant | None:
 
 
 def parse_udt(payload: bytes) -> UserDefinedType:
-    r = Reader(payload)
-    type_index = r.u32()
-    return UserDefinedType(name=r.cstring(), type_index=type_index)
+    (type_index,), name = _fixed_then_name(payload, _UDT_FIXED)
+    return UserDefinedType(name=name, type_index=type_index)
 
 
 def extract_constants(data: bytes) -> list[Constant]:
     out = []
-    for rec in iter_records(data):
-        if rec.kind != S_CONSTANT:
-            continue
+    for rec in iter_records(data, kinds=_CONSTANT_KINDS):
         try:
             constant = parse_constant(rec.payload)
         except EOFError:
@@ -710,9 +998,7 @@ def count_undecoded_constants(data: bytes) -> int:
     case; no fixture in the corpus has one.
     """
     total = 0
-    for rec in iter_records(data):
-        if rec.kind != S_CONSTANT:
-            continue
+    for rec in iter_records(data, kinds=_CONSTANT_KINDS):
         try:
             if parse_constant(rec.payload) is None:
                 total += 1
@@ -723,9 +1009,7 @@ def count_undecoded_constants(data: bytes) -> int:
 
 def extract_udts(data: bytes) -> list[UserDefinedType]:
     out = []
-    for rec in iter_records(data):
-        if rec.kind != S_UDT:
-            continue
+    for rec in iter_records(data, kinds=_UDT_KINDS):
         try:
             out.append(parse_udt(rec.payload))
         except EOFError:
@@ -861,11 +1145,34 @@ class CompileInfo:
 
 
 def parse_compile_info(payload: bytes) -> CompileInfo:
+    # The language is the low byte of the flags; the rest are feature bits.
+    (flags, machine, *versions), compiler = _fixed_then_name(payload, _COMPILE3_FIXED)
+    fe_major, fe_minor, fe_build, fe_qfe, be_major, be_minor, be_build, be_qfe = versions
+    return CompileInfo(
+        language=flags & 0xFF,
+        machine=machine,
+        frontend=(fe_major, fe_minor, fe_build, fe_qfe),
+        backend=(be_major, be_minor, be_build, be_qfe),
+        compiler=compiler,
+    )
+
+
+def parse_compile2(payload: bytes) -> CompileInfo:
+    """S_COMPILE2, the record S_COMPILE3 replaced in VS2010.
+
+    The same fields with three-part version numbers -- no QFE -- and an
+    optional block of NUL-terminated strings after the version string, which
+    is not read. A VS2008 python27.pdb carries eleven of these beside 500
+    S_COMPILE3 records (the modules the linker synthesised), and a toolchain
+    of that age writes nothing else. `cvinfo.h` calls the version string
+    length-prefixed, which is the `_ST` form; the SZ record that this kind
+    is holds a NUL-terminated one, and `link.exe` 9.00 writes it so.
+    """
     r = Reader(payload)
-    flags = r.u32()  # the language is its low byte; the rest are feature bits
+    flags = r.u32()
     machine = r.u16()
-    frontend = (r.u16(), r.u16(), r.u16(), r.u16())
-    backend = (r.u16(), r.u16(), r.u16(), r.u16())
+    frontend = (r.u16(), r.u16(), r.u16(), 0)
+    backend = (r.u16(), r.u16(), r.u16(), 0)
     return CompileInfo(
         language=flags & 0xFF,
         machine=machine,
@@ -876,7 +1183,7 @@ def parse_compile_info(payload: bytes) -> CompileInfo:
 
 
 def extract_compile_infos(data: bytes) -> list[CompileInfo]:
-    """Every S_COMPILE3 in one module's symbol region.
+    """Every S_COMPILE3 (or S_COMPILE2) in one module's symbol region.
 
     A module is not limited to one. An import library arrives as a single DBI
     module holding the records of every member `.obj` in it, so those modules
@@ -884,42 +1191,33 @@ def extract_compile_infos(data: bytes) -> list[CompileInfo]:
     sqlite x64 fixture. Reporting only the first would undercount the file by
     half.
     """
-    return _decoded(parse_compile_info,
-                    (r for r in iter_records(data) if r.kind == S_COMPILE3))
+    out: list[CompileInfo] = []
+    for rec in iter_records(data, kinds=COMPILE_KINDS):
+        info = decode_record(rec.kind, rec.payload)
+        if info is not None:
+            out.append(info)
+    return out
 
 
 def parse_thunk(payload: bytes) -> ThunkSymbol:
-    r = Reader(payload)
-    r.u32()  # Parent
-    r.u32()  # End
-    r.u32()  # Next
-    offset = r.u32()
-    segment = r.u16()
-    length = r.u16()
-    ordinal = r.u8()
-    name = r.cstring()
+    (_parent, _end, _next, offset, segment, length,
+     ordinal), name = _fixed_then_name(payload, _THUNK_FIXED)
     # Variant data keyed by `ordinal` follows the name; we do not decode it.
     return ThunkSymbol(name=name, segment=segment, offset=offset,
                        length=length, ordinal=ordinal)
 
 
 def parse_label(payload: bytes) -> LabelSymbol:
-    r = Reader(payload)
-    offset = r.u32()
-    segment = r.u16()
-    flags = r.u8()
-    return LabelSymbol(name=r.cstring(), segment=segment, offset=offset,
-                       flags=flags)
+    (offset, segment, flags), name = _fixed_then_name(payload, _LABEL_FIXED)
+    return LabelSymbol(name=name, segment=segment, offset=offset, flags=flags)
 
 
 def parse_trampoline(payload: bytes) -> Trampoline:
-    r = Reader(payload)
-    kind = r.u16()
-    size = r.u16()
-    offset = r.u32()
-    target_offset = r.u32()
-    segment = r.u16()
-    target_segment = r.u16()
+    if len(payload) < _TRAMPOLINE.size:
+        raise EOFError(f"read past end of buffer (need {_TRAMPOLINE.size}, "
+                       f"have {len(payload)})")
+    (kind, size, offset, target_offset, segment,
+     target_segment) = _TRAMPOLINE.unpack_from(payload, 0)
     return Trampoline(kind=kind, size=size, segment=segment, offset=offset,
                       target_segment=target_segment, target_offset=target_offset)
 
@@ -940,28 +1238,21 @@ def _decoded(parse, records):
 def extract_thunks(data: bytes) -> list[ThunkSymbol]:
     """S_THUNK32 records. The scope each opens is closed by a later S_END,
     which the flat record walk steps over like any other record."""
-    return _decoded(parse_thunk,
-                    (r for r in iter_records(data) if r.kind == S_THUNK32))
+    return _decoded(parse_thunk, iter_records(data, kinds=_THUNK_KINDS))
 
 
 def extract_trampolines(data: bytes) -> list[Trampoline]:
-    return _decoded(parse_trampoline,
-                    (r for r in iter_records(data) if r.kind == S_TRAMPOLINE))
+    return _decoded(parse_trampoline, iter_records(data, kinds=_TRAMPOLINE_KINDS))
 
 
 def extract_labels(data: bytes) -> list[LabelSymbol]:
     """S_LABEL32 records. They sit inside a procedure's scope, which the flat
     record walk steps through like any other nesting."""
-    return _decoded(parse_label,
-                    (r for r in iter_records(data) if r.kind == S_LABEL32))
+    return _decoded(parse_label, iter_records(data, kinds=_LABEL_KINDS))
 
 
 def parse_data(kind: int, payload: bytes) -> DataSymbol:
-    r = Reader(payload)
-    type_index = r.u32()
-    offset = r.u32()
-    segment = r.u16()
-    name = r.cstring()
+    (type_index, offset, segment), name = _fixed_then_name(payload, _DATA_FIXED)
     return DataSymbol(
         name=name, segment=segment, offset=offset,
         type_index=type_index, kind=kind,
@@ -971,33 +1262,28 @@ def parse_data(kind: int, payload: bytes) -> DataSymbol:
 def parse_thread_local(kind: int, payload: bytes) -> ThreadLocalSymbol:
     """Same fixed portion as `parse_data`; see `ThreadLocalSymbol` for why the
     address it carries is not the same kind of address."""
-    r = Reader(payload)
-    type_index = r.u32()
-    offset = r.u32()
-    segment = r.u16()
+    (type_index, offset, segment), name = _fixed_then_name(payload, _DATA_FIXED)
     return ThreadLocalSymbol(
-        name=r.cstring(), segment=segment, offset=offset,
+        name=name, segment=segment, offset=offset,
         type_index=type_index, kind=kind,
     )
 
 
 def extract_thread_locals(data: bytes) -> list[ThreadLocalSymbol]:
     out: list[ThreadLocalSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind in THREAD_KINDS:
-            sym = decode_record(rec.kind, rec.payload)
-            if sym is not None:
-                out.append(sym)
+    for rec in iter_records(data, kinds=THREAD_KINDS):
+        sym = decode_record(rec.kind, rec.payload)
+        if sym is not None:
+            out.append(sym)
     return out
 
 
 def extract_data(data: bytes) -> list[DataSymbol]:
     out: list[DataSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind in _DATA_KINDS:
-            sym = decode_record(rec.kind, rec.payload)
-            if sym is not None:
-                out.append(sym)
+    for rec in iter_records(data, kinds=_DATA_KINDS):
+        sym = decode_record(rec.kind, rec.payload)
+        if sym is not None:
+            out.append(sym)
     return out
 
 
@@ -1008,12 +1294,11 @@ def extract_publics(data: bytes) -> list[PublicSymbol]:
     and scanning it finds nothing. See `purepdb.gsi`.
     """
     out: list[PublicSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind == S_PUB32:
-            sym = decode_record(rec.kind, rec.payload)
-            if sym is not None:
-                sym.record_offset = rec.offset
-                out.append(sym)
+    for rec in iter_records(data, kinds=_PUBLIC_KINDS):
+        sym = decode_record(rec.kind, rec.payload)
+        if sym is not None:
+            sym.record_offset = rec.offset
+            out.append(sym)
     return out
 
 
@@ -1031,11 +1316,10 @@ def extract_procs(data: bytes) -> list[ProcSymbol]:
     `data` should already have the leading 4-byte CV signature stripped.
     """
     out: list[ProcSymbol] = []
-    for rec in iter_records(data):
-        if rec.kind in PROC_KINDS:
-            proc = decode_record(rec.kind, rec.payload)
-            if proc is not None:
-                out.append(proc)
+    for rec in iter_records(data, kinds=PROC_KINDS):
+        proc = decode_record(rec.kind, rec.payload)
+        if proc is not None:
+            out.append(proc)
     return out
 
 
@@ -1053,7 +1337,9 @@ _RECORD_PARSERS: dict[int, Callable[[int, bytes], object]] = {
     S_CONSTANT: lambda _kind, payload: parse_constant(payload),
     S_UDT: lambda _kind, payload: parse_udt(payload),
     S_COMPILE3: lambda _kind, payload: parse_compile_info(payload),
-    S_INLINESITE: lambda _kind, payload: parse_inline_site(payload),
+    S_COMPILE2: lambda _kind, payload: parse_compile2(payload),
+    S_SEPCODE: lambda _kind, payload: parse_sepcode(payload),
+    **dict.fromkeys(INLINE_SITE_KINDS, parse_inline_site_record),
     **dict.fromkeys(PROC_KINDS, parse_proc),
     **dict.fromkeys(_DATA_KINDS, parse_data),
     **dict.fromkeys(PROC_REF_KINDS, parse_proc_ref),

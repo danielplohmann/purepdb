@@ -165,11 +165,12 @@ def _short_record(kind: int, payload_len: int = 0) -> bytes:
 TRUNCATABLE_KINDS = [
     codeview.S_PUB32, codeview.S_GPROC32, codeview.S_LPROC32,
     codeview.S_GPROC32_ID, codeview.S_LPROC32_ID,
+    codeview.S_LPROC32_DPC, codeview.S_LPROC32_DPC_ID,
     codeview.S_GDATA32, codeview.S_LDATA32,
     codeview.S_PROCREF, codeview.S_LPROCREF,
     codeview.S_LABEL32, codeview.S_THUNK32, codeview.S_TRAMPOLINE,
-    codeview.S_CONSTANT, codeview.S_UDT, codeview.S_COMPILE3,
-    codeview.S_INLINESITE,
+    codeview.S_CONSTANT, codeview.S_UDT, codeview.S_COMPILE3, codeview.S_COMPILE2,
+    codeview.S_INLINESITE, codeview.S_INLINESITE2, codeview.S_SEPCODE,
     codeview.S_GTHREAD32, codeview.S_LTHREAD32,
 ]
 

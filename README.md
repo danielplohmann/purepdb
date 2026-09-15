@@ -21,12 +21,15 @@ Runtime dependencies: none. Python 3.11+.
 ```python
 from purepdb import PDB
 
-pdb = PDB.open("app.pdb")
-
-for fn in pdb.functions():
-    print(hex(fn.rva or 0), fn.name)
-    # fn.segment, fn.offset, fn.code_size, fn.source, fn.aliases, fn.module
+with PDB.open("app.pdb") as pdb:
+    for fn in pdb.functions():
+        print(hex(fn.rva or 0), fn.name)
+        # fn.segment, fn.offset, fn.code_size, fn.source, fn.aliases, fn.module
 ```
+
+`open` memory-maps the file. The `with` (or `pdb.close()`) releases that
+mapping; until then the PDB cannot be replaced or deleted, which on Windows
+is an exclusive mapping rather than a copy.
 
 `module` is the linker input the address came from — an `.obj` path, a library
 member, or `Import:foo.dll` for an import thunk — taken from DBI's Section

@@ -113,7 +113,22 @@ Rust and modern C++ this is where most of the code goes, and a tool that reports
 only entry points is describing a small fraction of what ran.
 
 `S_INLINESITE` gives the ranges a body occupies inside its caller, and the name
-comes from the IPI stream by item id.
+comes from the IPI stream by item id. MSVC writes the record as `S_INLINESITE2`
+— the same thing with an invocation count in front of the annotations — and
+until purepdb read that kind, a python 3.12 `python312.pdb` showed 34 inline
+sites where there are 48642. With profile-guided optimisation, a body inlined
+into the cold half of a split function has its ranges in a *separated code
+chunk*: the annotations name the chunk by number (`ChangeCodeOffsetBase n`) and
+an `S_SEPCODE` record after the procedure's scope says where that chunk is. The
+21 sites in `_bz2.pdb` that went missing as "describing no code" were these.
+
+The annotation cursor has one rule worth writing down, because two readings of
+it are plausible and only a real file tells them apart. A standalone
+`ChangeCodeLength` closes a range and moves the cursor past it ("default next
+start"); the length fused into `ChangeCodeLengthAndCodeOffset` closes a range
+and *leaves the cursor where the range began*. Read the fused length as
+advancing and 5582 of python312.pdb's 79187 ranges end past the procedure or
+chunk that holds them; read it as llvm-pdbutil always has and none does.
 
 ## Some addresses are not variable addresses
 
@@ -157,6 +172,18 @@ record that alignment anywhere, so the reconstruction assumes the PE default of
 It works — clearing slot 5 in a byte copy of each fixture leaves every function
 at the address it had before. But it is a reconstruction, not a reading, and a
 consumer deserves to know which it got. `diagnose()` reports it.
+
+Measured more widely in the 2026-09 audit, against 33 real PDBs that carry a
+section table to compare with: the rebuilt addresses are exact on every
+user-mode image `link.exe` or an LLVM linker produced — python 2.7 through 3.14
+on x64, x86 and arm64, node, the Win10 and Win11 system DLLs, everything
+self-built — and exact against the *pre-BBT* table in slot 10 on the five
+BBT-processed Win7 and XP files, which is the layout the map describes. It is
+wrong on kernel-mode images linked with a small `/ALIGN`: `hal.dll` puts its
+first section at 0x380 and `ntkrnlpa.exe` at 0x600, and the PDB does not say so.
+One more limit is the map's flags: `ntkrnlmp.exe`'s 28th section is code in the
+real table and carries no `SEG_EXECUTE` in the map, so without slot 5 its
+publics would not count as code publics. The addresses there are still right.
 
 ## Empty is the normal failure mode
 

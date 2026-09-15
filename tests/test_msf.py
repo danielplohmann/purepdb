@@ -44,7 +44,10 @@ def test_empty_stream():
 
 def test_different_block_sizes():
     payload = b"z" * 5000
-    for bs in (512, 1024, 4096):
+    # The three large sizes are what a PDB past a few gigabytes is written
+    # with, since the block map is one block and has to name the directory's
+    # blocks; refusing them refused exactly the huge files.
+    for bs in (512, 1024, 2048, 4096, 8192, 16384, 32768):
         msf = MsfFile(build_msf([payload], block_size=bs))
         assert msf.super.block_size == bs
         assert msf.read_stream(0) == payload
@@ -175,3 +178,74 @@ def test_a_foreign_format_handed_in_as_a_buffer_is_still_named():
 
     with pytest.raises(UnsupportedPdbError, match="Portable PDB"):
         MsfFile(memoryview(data))
+
+
+def test_streams_claiming_more_than_the_file_holds_are_rejected():
+    """Every block belongs to one stream, so the streams' sizes sum to at most
+    the file's. A directory whose block lists all name the same block passes
+    every per-stream check and describes gigabytes in a few kilobytes -- and
+    that claim is what `read_stream` would allocate for."""
+    import struct
+
+    from purepdb.msf import MsfError
+
+    bs = 512
+    n_streams = 64
+    size = 60 * bs  # 60 blocks each, all of them block 3
+    directory = struct.pack("<I", n_streams)
+    directory += struct.pack(f"<{n_streams}I", *([size] * n_streams))
+    directory += struct.pack(f"<{60 * n_streams}I", *([3] * (60 * n_streams)))
+    n_dir_blocks = -(-len(directory) // bs)
+    # Blocks: 0 superblock, 1-2 FPM, 3 the shared payload block, then the
+    # directory, then the block map.
+    dir_blocks = list(range(4, 4 + n_dir_blocks))
+    map_block = 4 + n_dir_blocks
+    num_blocks = map_block + 1
+    buf = bytearray(num_blocks * bs)
+    from purepdb.msf import BIG_MSF_MAGIC
+    struct.pack_into("<32sIIIIII", buf, 0, BIG_MSF_MAGIC, bs, 1, num_blocks,
+                     len(directory), 0, map_block)
+    for i, blk in enumerate(dir_blocks):
+        chunk = directory[i * bs:(i + 1) * bs]
+        buf[blk * bs:blk * bs + len(chunk)] = chunk
+    buf[map_block * bs:map_block * bs + 4 * n_dir_blocks] = struct.pack(
+        f"<{n_dir_blocks}I", *dir_blocks)
+    with pytest.raises(MsfError, match=r"claims .* bytes of streams"):
+        MsfFile(bytes(buf))
+
+
+def test_open_maps_the_file_and_close_releases_it(tmp_path):
+    """`open` is the path that used to copy the whole file into `bytes`.
+    Mapping keeps the handle for the object's lifetime, so close() is part
+    of the API rather than an afterthought."""
+    payload = bytes(range(256)) * 10
+    path = tmp_path / "mapped.pdb"
+    path.write_bytes(build_msf([b"", payload], block_size=512))
+
+    msf = MsfFile.open(str(path))
+    assert msf.read_stream(1) == payload
+    msf.close()
+    with pytest.raises(MsfError, match="closed"):
+        msf.read_stream(1)
+    msf.close()  # idempotent
+
+
+def test_open_copy_does_not_need_close(tmp_path):
+    payload = b"hello world"
+    path = tmp_path / "copied.pdb"
+    path.write_bytes(build_msf([payload]))
+
+    msf = MsfFile.open(str(path), copy=True)
+    msf.close()
+    assert msf.read_stream(0) == payload
+
+
+def test_open_as_a_context_manager(tmp_path):
+    payload = b"hello world"
+    path = tmp_path / "ctx.pdb"
+    path.write_bytes(build_msf([payload]))
+
+    with MsfFile.open(str(path)) as msf:
+        assert msf.read_stream(0) == payload
+    with pytest.raises(MsfError, match="closed"):
+        msf.read_stream(0)

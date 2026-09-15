@@ -150,23 +150,20 @@ def test_an_unrecognised_failure_is_still_a_parse_error(validator, tmp_path):
                        ("--section-contribs",), {})
 
 
-def test_inline_site_ranges_come_from_the_deltas_not_the_offsets(validator):
-    """llvm-pdbutil moves its cursor past the length of a standalone
-    `ChangeCodeLength` and not past the one fused into
-    `ChangeCodeLengthAndCodeOffset`, so from the second range on, a site built
-    out of the fused opcode prints every offset short by the lengths before
-    it. Reading the absolutes off the fused form reported all 140 sites of the
-    syzygy fixture as a disagreement.
+def test_inline_site_ranges_follow_the_fused_opcode_the_way_llvm_prints_them(validator):
+    """The length fused into `ChangeCodeLengthAndCodeOffset` does not move the
+    cursor, so the next delta is measured from where the range began: 0x148
+    here, as llvm prints, and not 0x14A. The harness used to insist on 0x14A
+    and rebuild every range on that rule; the python 3.12 PDBs, whose sites
+    run past the end of their procedure under it and never under llvm's,
+    settled which reading is the format's.
     """
     fused = validator.RefRecord(
         kind="S_INLINESITE", header="", module=0,
         body=["           0C028143  code 0x143 (+0x143) code end 0x145 (+0x2)",
               "           0C0805    code 0x148 (+0x5) code end 0x150 (+0x8)"])
 
-    # 0x14A, not the 0x148 llvm printed: the second range starts where the
-    # first one ended plus the delta, which is the reading that makes the two
-    # opcodes mean the same thing.
-    assert validator.inline_site_ranges(fused) == [(0x143, 2), (0x14A, 8)]
+    assert validator.inline_site_ranges(fused) == [(0x143, 2), (0x148, 8)]
 
 
 def test_the_standalone_length_opcode_still_reads_as_llvm_prints_it(validator):

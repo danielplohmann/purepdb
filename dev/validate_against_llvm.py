@@ -18,7 +18,7 @@ those verified nothing, and a run that verified nothing must not print `ok`.
 A missing `llvm-pdbutil` exits 0 with a message, so running this is never a
 requirement; `--require-tool` makes it an error instead, which is what CI does.
 
-Nine checks, over the subsystems whose accuracy was claimed in a PR
+Thirteen checks, over the subsystems whose accuracy was claimed in a PR
 description and nowhere else:
 
     procs               S_*PROC32 name, address and code size
@@ -26,6 +26,10 @@ description and nowhere else:
     labels              S_LABEL32 name and address
     constants           S_CONSTANT name and value
     udts                S_UDT name and type index
+    data                S_GDATA32/S_LDATA32 name, address and scope, each once
+    thread locals       S_GTHREAD32/S_LTHREAD32 the same way
+    thunks              S_THUNK32 name, address and size
+    trampolines         S_TRAMPOLINE kind, size, source and target section
     contributions       the Section Contribution table
     inline sites        each inlined body, its name, and every code range
     module attribution  the module each function is attributed to
@@ -93,7 +97,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from purepdb import PDB, PdbError
+from purepdb import PDB, PdbError, codeview
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = REPO / "tests" / "data"
@@ -133,6 +137,14 @@ _CANNOT_ANSWER = (
     ("PDB does not contain the requested image section header type",
      "this file has no section-header stream (optional debug header slot 5), "
      "which llvm-pdbutil needs before it will name a contribution's section"),
+    # The five XP-era public symbol files on Microsoft's symbol server take
+    # llvm-pdbutil 18 down in TpiStream::getNumTypeRecords on any dump that
+    # opens the type stream, `--publics` included. A reference that crashed
+    # verified nothing and contradicted nothing; purepdb reads the files, and
+    # pdbparse agrees with it on every public in them.
+    ("PLEASE submit a bug report",
+     "llvm-pdbutil crashed on this file, so it cannot serve as the reference "
+     "for it"),
 )
 
 
@@ -148,6 +160,10 @@ class Check:
     name: str
     args: tuple[str, ...]  # what to pass to `llvm-pdbutil dump`
     compare: Callable[[PDB, str], Result]
+    optional: bool = False
+    """A check most files have nothing for -- thread-locals, trampolines --
+    is allowed to compare no record over a whole run. The others are not:
+    a run in which no file had a procedure verified nothing."""
 
 
 # --- running the reference implementation -----------------------------------
@@ -186,7 +202,7 @@ def dump(tool: str, path: Path, args: Iterable[str], cache: dict) -> str:
             # against a full listing reads as purepdb inventing records, and a
             # crash that prints only its banner reads as agreement on nothing.
             # Both used to be a printed note over a zero exit status.
-            detail = proc.stderr.strip().splitlines()
+            detail = proc.stderr.strip().split("\n")
             note = (detail[0][:200] if detail
                     else f"exit status {proc.returncode}")
             for marker, why in _CANNOT_ANSWER:
@@ -268,7 +284,7 @@ def iter_records(text: str):
     """Yield one RefRecord per symbol record, with its continuation lines."""
     current: RefRecord | None = None
     module = -1
-    for line in text.splitlines():
+    for line in text.split("\n"):
         index = module_start(line)
         if index is not None:
             if current is not None:
@@ -314,7 +330,7 @@ def module_names(text: str) -> dict[int, str]:
     A module llvm could not resolve has no name to record, and is left out.
     """
     out = {}
-    for line in text.splitlines():
+    for line in text.split("\n"):
         m = _MODULE.match(line)
         if m and m.group("name") is not None:
             out[int(m.group("index"))] = m.group("name")
@@ -329,7 +345,7 @@ def modules_without_a_stream(text: str) -> set[int]:
     them. Comparing them would fail against any parser that reads the file.
     """
     out, current = set(), -1
-    for line in text.splitlines():
+    for line in text.split("\n"):
         index = module_start(line)
         if index is not None:
             current = index
@@ -430,16 +446,110 @@ def check_udts(pdb: PDB, text: str) -> Result:
     return Result(ours, theirs)
 
 
+def check_data(pdb: PDB, text: str) -> Result:
+    """S_GDATA32/S_LDATA32, each once, from the module streams and the globals.
+
+    `data_symbols()` reads both and drops a record described in both on
+    (name, segment, offset, kind), so the reference is deduplicated the same
+    way -- the two dumps here are `--symbols` and `--globals` in one run, and
+    a static in both prints twice.
+    """
+    ours = sorted({(d.name, d.segment, d.offset, d.is_global)
+                   for d in pdb.data_symbols()})
+    theirs = set()
+    for rec in iter_records(text):
+        if rec.kind not in ("S_GDATA32", "S_LDATA32"):
+            continue
+        addr = rec.address()
+        if addr is None:
+            raise ParseError(f"no address on {rec.kind} `{rec.name}`")
+        theirs.add((rec.name, addr[0], addr[1], rec.kind == "S_GDATA32"))
+    return Result(ours, sorted(theirs))
+
+
+def check_thread_locals(pdb: PDB, text: str) -> Result:
+    """S_GTHREAD32/S_LTHREAD32, deduplicated the way `thread_locals()` is."""
+    ours = sorted({(t.name, t.segment, t.offset, t.is_global)
+                   for t in pdb.thread_locals()})
+    theirs = set()
+    for rec in iter_records(text):
+        if rec.kind not in ("S_GTHREAD32", "S_LTHREAD32"):
+            continue
+        addr = rec.address()
+        if addr is None:
+            raise ParseError(f"no address on {rec.kind} `{rec.name}`")
+        theirs.add((rec.name, addr[0], addr[1], rec.kind == "S_GTHREAD32"))
+    return Result(ours, sorted(theirs))
+
+
+def check_thunks(pdb: PDB, text: str) -> Result:
+    ours = [(t.name, t.segment, t.offset, t.length) for t in pdb.thunks()]
+    theirs = []
+    for rec in iter_records(text):
+        if rec.kind != "S_THUNK32":
+            continue
+        addr = rec.address()
+        size = rec.field(r"size = (\d+)")
+        if addr is None or size is None:
+            raise ParseError(f"no address or size on S_THUNK32 `{rec.name}`")
+        theirs.append((rec.name, addr[0], addr[1], int(size)))
+    return Result(ours, theirs)
+
+
+_TRAMPOLINE = re.compile(r"type = (?P<type>[\w ]+?), size = (?P<size>\d+), "
+                         r"source = (?P<ss>\d+):(?P<so>\d+), "
+                         r"target = (?P<ts>\d+):(?P<to>\d+)")
+_TRAMPOLINE_KINDS = {"tramp incremental": 0, "branch island": 1}
+
+
+def check_trampolines(pdb: PDB, text: str) -> Result:
+    """S_TRAMPOLINE by kind, size, source and target *section*.
+
+    The target offset is left out: llvm-pdbutil 18 prints the thunk's own
+    offset in the target slot (`source = 0001:0005, target = 0001:0005` for
+    all 348 in sqlite3 x64), so the field it shows is not the record's.
+    purepdb's target is checked against the image instead --
+    `test_trampolines_jump_where_the_record_says` follows the `jmp rel32` at
+    each source and lands on the target for every one.
+    """
+    ours = [(t.kind, t.size, t.segment, t.offset, t.target_segment)
+            for t in pdb.trampolines()]
+    theirs = []
+    for rec in iter_records(text):
+        if rec.kind != "S_TRAMPOLINE":
+            continue
+        m = None
+        for line in rec.body:
+            m = _TRAMPOLINE.search(line)
+            if m:
+                break
+        if m is None or m.group("type") not in _TRAMPOLINE_KINDS:
+            raise ParseError(f"unrecognised S_TRAMPOLINE body {rec.body!r}")
+        theirs.append((_TRAMPOLINE_KINDS[m.group("type")], int(m.group("size")),
+                       int(m.group("ss")), int(m.group("so")),
+                       int(m.group("ts"))))
+    notes = ["target offsets not compared: llvm-pdbutil 18 prints the "
+             "thunk offset there"] if theirs else []
+    return Result(ours, theirs, notes)
+
+
 # `SC[...]` is the Ver60 table and `SC2[...]` the V2 one, which differs only by
 # a trailing `coff section` field. purepdb reads both, so both are compared.
-_SC = re.compile(r"^\s*SC2?\[(?P<section>[^\]]*)\]\s*\| mod = (?P<mod>\d+), "
+# The section name is printed as the eight raw bytes of the header, and a
+# Windows kernel has one whose name is followed by bytes that are not text
+# (`PAGEVRFY\x1c!\x03` in ntkrnlmp), so the name is whatever sits between the
+# brackets and the ` | mod` that follows, and not "anything but a bracket".
+_SC = re.compile(r"^\s*SC2?\[(?P<section>.*?)\]\s*\| mod = (?P<mod>\d+), "
                  r"(?P<segment>\d+):(?P<offset>\d+), size = (?P<size>\d+)")
 _SC_ANY = re.compile(r"^\s*SC")
 
 
 def _reference_contributions(text: str) -> list[tuple[int, int, int, int]]:
+    # Split on newlines alone: `str.splitlines` also breaks on \x1c, and the
+    # Windows kernel has a section whose eight-byte name holds one
+    # (`PAGEVRFY\x1c!\x03`), which cut its row in two.
     out = []
-    for line in text.splitlines():
+    for line in text.split("\n"):
         m = _SC.match(line)
         if m:
             out.append((int(m.group("segment")), int(m.group("offset")),
@@ -530,7 +640,7 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
             raise ParseError(f"module {module}: read {seen} line entries "
                              f"where the block header said {expected}")
 
-    for raw in text.splitlines():
+    for raw in text.split("\n"):
         index = module_start(raw)
         if index is not None:
             check_block_is_complete()
@@ -593,8 +703,25 @@ def check_lines(pdb: PDB, text: str, streamless: set[int],
     return Result(ours, theirs, notes)
 
 
-_INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+) "
-                      r"\((?P<name>.*)\), parent")
+# The name is absent when the id resolves to nothing -- MSVC 14.0 x86 writes
+# `inlinee = 0x80000002` for some sites, an id the IPI has no record for, and
+# llvm prints no parenthesis at all. purepdb reports the same site with an
+# empty name, so both sides then compare on the id alone.
+_INLINEE = re.compile(r"inlinee = (?P<id>0x[0-9A-Fa-f]+)"
+                      r"(?: \((?P<name>.*)\))?, parent")
+
+# llvm-pdbutil prints an inlinee name cut to this many characters with an
+# ellipsis after it -- `convert_special_to_empty_and_ful...` for a Rust name
+# twice that long -- and nothing else in its output is cut. Both sides are
+# shortened the same way so that a long name compares on what the tool
+# printed rather than failing on the ellipsis it added.
+_LLVM_INLINEE_NAME_WIDTH = 32
+
+
+def _shortened_like_llvm(name: str) -> str:
+    if len(name) > _LLVM_INLINEE_NAME_WIDTH:
+        return name[:_LLVM_INLINEE_NAME_WIDTH] + "..."
+    return name
 # Every annotation prints its own bytes first, and the first of those is the
 # opcode: the compressed encoding of an opcode in 1..13 is the byte itself.
 _ANNOTATION = re.compile(r"^\s+(?P<opcode>[0-9A-F]{2})[0-9A-F]*\s+"
@@ -615,23 +742,19 @@ _CLOSES_A_RANGE = (_BA_CHANGE_CODE_LENGTH,
 def inline_site_ranges(rec: RefRecord) -> list[tuple[int, int]]:
     """The code ranges one S_INLINESITE covers, relative to its procedure.
 
-    Rebuilt from the deltas rather than read off the absolute offsets llvm
-    prints, because on some files those two disagree and the deltas are the
-    part both sides read the same way. `ChangeCodeLength` moves
-    llvm's cursor past the range it closed; the length fused into
-    `ChangeCodeLengthAndCodeOffset` does not move it, so from the second range
-    on, a site built out of the fused opcode prints every offset short by the
-    lengths before it. A cursor that a range's length advances is the reading
-    that makes the two opcodes mean the same thing, and it is what purepdb
-    does.
-
-    llvm's own cursor is tracked beside it and checked against every absolute
-    offset printed. That is what keeps this from being an assumption: the day
-    the tool stops behaving this way, the run says so rather than comparing
-    against a rule that no longer holds.
+    Rebuilt from the deltas and checked against the absolute offsets llvm
+    prints, so that a change in how the tool renders an annotation is a
+    `ParseError` here rather than a silent disagreement. The cursor rule is
+    llvm's, which is also cvinfo.h's and, since 0.6.0, purepdb's: a
+    standalone `ChangeCodeLength` moves the cursor past the range it closed
+    ("default next start"), and the length fused into
+    `ChangeCodeLengthAndCodeOffset` does not, so the next delta is measured
+    from where that range began. purepdb read the fused one the other way
+    until the python 3.12 PDBs showed 5582 ranges placed past the end of
+    their procedure by it, and none by this rule; the 0.5.0 note that called
+    llvm's cursor the odd one out had it backwards.
     """
-    offset = 0  # the cursor a range's length advances
-    theirs = 0  # llvm-pdbutil's, which only a standalone length advances
+    offset = 0  # the cursor, which only a standalone length advances
     ranges: list[tuple[int, int]] = []
     for line in rec.body:
         annotation = _ANNOTATION.match(line)
@@ -652,17 +775,15 @@ def inline_site_ranges(rec: RefRecord) -> list[tuple[int, int]]:
             step = int(delta, 16)
             if not end:
                 offset += step
-                theirs += step
-                expected = theirs
+                expected = offset
             else:
                 if opcode not in _CLOSES_A_RANGE:
                     raise ParseError(f"annotation {opcode} closed a code "
                                      f"range, which only 04 and 0C do")
                 ranges.append((offset, step))
-                offset += step
-                expected = theirs + step
+                expected = offset + step
                 if opcode == _BA_CHANGE_CODE_LENGTH:
-                    theirs += step
+                    offset += step
             if int(value, 16) != expected:
                 raise ParseError(
                     f"llvm-pdbutil's inline-site cursor reads 0x{expected:X} "
@@ -682,10 +803,17 @@ def check_inline_sites(pdb: PDB, text: str, named: bool) -> Result:
     def site(parent: str, inlinee: int, name: str, ranges: tuple) -> tuple:
         if not named:
             return (parent, inlinee, ranges)
-        return (parent, inlinee, name, ranges)
+        return (parent, inlinee, _shortened_like_llvm(name), ranges)
 
+    # llvm-pdbutil 18 prints an S_INLINESITE2 record as a size and nothing
+    # else -- no inlinee, no annotations -- so the sites MSVC writes in that
+    # form (48608 of the 48642 in python312.pdb) cannot be compared against
+    # it, and are left out of both sides with a note saying how many.
     ours = [site(s.parent, s.inlinee, s.name, tuple(s.ranges))
-            for s in pdb.inline_sites()]
+            for s in pdb.inline_sites()
+            if s.record_kind != codeview.S_INLINESITE2]
+    undecoded = sum(1 for s in pdb.inline_sites()
+                    if s.record_kind == codeview.S_INLINESITE2)
 
     theirs = []
     proc: tuple[str, int] | None = None  # (name, offset) of the enclosing proc
@@ -716,11 +844,15 @@ def check_inline_sites(pdb: PDB, text: str, named: bool) -> Result:
             # there is no address to report it at.
             continue
         theirs.append(site(proc[0], int(inlinee.group("id"), 16),
-                           inlinee.group("name"), tuple(ranges)))
+                           inlinee.group("name") or "", tuple(ranges)))
     notes = [] if named else [
         "llvm-pdbutil reports no ID stream for this file, so it resolved every "
         "inlinee id against the TPI and printed a type name; names not compared"
     ]
+    if undecoded:
+        notes.append(f"{undecoded} S_INLINESITE2 site(s) not compared: "
+                     f"llvm-pdbutil 18 prints the record's size and nothing "
+                     f"else")
     return Result(ours, theirs, notes)
 
 
@@ -730,6 +862,11 @@ CHECKS = [
     Check("labels", ("--symbols",), check_labels),
     Check("constants", ("--globals",), check_constants),
     Check("udts", ("--globals",), check_udts),
+    Check("data", ("--symbols", "--globals"), check_data, optional=True),
+    Check("thread locals", ("--symbols", "--globals"), check_thread_locals,
+          optional=True),
+    Check("thunks", ("--symbols",), check_thunks, optional=True),
+    Check("trampolines", ("--symbols",), check_trampolines, optional=True),
     Check("contributions", ("--section-contribs",), check_contributions),
 ]
 
@@ -738,8 +875,9 @@ CHECKS = [
 LATE_CHECKS = ("inline sites", "module attribution", "lines")
 
 
-def check_names() -> list[str]:
-    return [check.name for check in CHECKS] + list(LATE_CHECKS)
+def check_names(*, required_only: bool = False) -> list[str]:
+    return ([check.name for check in CHECKS if not (required_only and check.optional)]
+            + list(LATE_CHECKS))
 
 
 # --- reporting --------------------------------------------------------------
@@ -920,7 +1058,8 @@ def main() -> int:
     # nothing, and two empty lists agree -- so without this it printed `ok`
     # and was indistinguishable from one that checked thousands. The same
     # reasoning as the empty-corpus guard above, one level further down.
-    if unverified := [name for name in check_names() if name not in verified]:
+    if unverified := [name for name in check_names(required_only=True)
+                      if name not in verified]:
         print(f"FAIL: {len(unverified)} check(s) compared no record on any "
               f"file, so they verified nothing:")
         for name in unverified:

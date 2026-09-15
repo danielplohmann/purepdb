@@ -1,5 +1,7 @@
 import struct
 
+import pytest
+
 from purepdb import PDB
 from purepdb.dbi import DbiStream
 from purepdb.sections import SectionTable
@@ -113,3 +115,64 @@ def test_functions_sorted_by_rva():
     pdb = PDB.from_bytes(_build_full_pdb())
     rvas = [f.rva for f in pdb.functions() if f.rva is not None]
     assert rvas == sorted(rvas)
+
+
+def test_dpc_procedures_are_procedures():
+    """S_LPROC32_DPC and S_LPROC32_DPC_ID share PROCSYM32's layout -- cvinfo.h
+    lists all six kinds on the one struct -- so a procedure compiled for a
+    DPC target is a procedure with an entry point like any other."""
+    import struct
+
+    from purepdb import PDB, codeview
+    from tests._synth import (
+        build_msf,
+        dbi_stream,
+        gproc32,
+        module_info,
+        module_sym_stream,
+        publics_hash_stream,
+        section_header,
+    )
+
+    records = (gproc32("plain", 1, 0x10)
+               + gproc32("dpc", 1, 0x40, kind=codeview.S_LPROC32_DPC)
+               + gproc32("dpc_id", 1, 0x80, kind=codeview.S_LPROC32_DPC_ID))
+    module_syms = module_sym_stream(records)
+    mods = module_info("k.obj", "k.obj", sym_stream=5, sym_byte_size=len(module_syms))
+    streams = [
+        b"",
+        struct.pack("<III", 20000404, 1, 1) + b"\x00" * 16,
+        b"",
+        dbi_stream(public_stream=4, symrecord_stream=7, module_list=mods,
+                   dbg_header=[0xFFFF] * 5 + [6]),
+        publics_hash_stream([]),
+        module_syms,
+        section_header(".text", 0x1000),
+        b"",
+    ]
+    pdb = PDB.from_bytes(build_msf(streams))
+    procs = pdb.module_procs()
+    assert [(p.name, p.is_global) for p in procs] == [
+        ("plain", True), ("dpc", False), ("dpc_id", False)]
+    assert [(f.name, f.rva, f.source) for f in pdb.functions()] == [
+        ("plain", 0x1010, "proc"), ("dpc", 0x1040, "proc"), ("dpc_id", 0x1080, "proc")]
+    assert pdb.diagnose().proc_records == 3
+
+
+def test_open_maps_and_close_is_part_of_the_api(tmp_path):
+    """`PDB.open` owns a mapping; listings after close must not leak
+    BufferError past the PdbError boundary."""
+    from purepdb import MsfError
+
+    path = tmp_path / "app.pdb"
+    path.write_bytes(_build_full_pdb())
+
+    with PDB.open(str(path)) as pdb:
+        names = {f.name for f in pdb.functions()}
+        assert "main" in names
+    with pytest.raises(MsfError, match="closed"):
+        pdb.functions()
+
+    copied = PDB.open(str(path), copy=True)
+    copied.close()
+    assert "main" in {f.name for f in copied.functions()}

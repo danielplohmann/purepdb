@@ -55,14 +55,15 @@ tests/              # pytest suite
   data/             #   groundtruth fixtures — in the repo, excluded from sdist/wheel
 tools/fuzz.py       # the parse-boundary fuzzer; runs outside pytest
 tools/relink_omap.py  # CLI over tests/_relink.py
-dev/                # scratch, EXCEPT two validate_* scripts (see below)
+dev/                # scratch, EXCEPT four tracked scripts (see below)
 .github/workflows/  # ci.yml, changelog.yml, fuzz.yml, publish-release.yml, validate.yml
 ```
 
-`dev/` is a scratch directory with two tracked exceptions: `.gitignore` holds
-`dev/*` plus a negation for `validate_against_llvm.py` and
-`validate_omap_against_windows.py`, because a CI job has to be able to run the
-first and the second is a documented check.
+`dev/` is a scratch directory with four tracked exceptions: `.gitignore` holds
+`dev/*` plus a negation for `validate_against_llvm.py`,
+`validate_omap_against_windows.py`, `survey_pdb_shapes.py` and
+`audit_corpus.py`, because a CI job has to be able to run the first and the
+others are documented checks over a corpus you already have.
 
 **Nothing else in `dev/` may be committed, and that matters here.**
 `validate_omap_against_windows.py` caches PDBs fetched from Microsoft's symbol
@@ -110,14 +111,15 @@ activate it first and drop the override):
 | ---- | ------- |
 | Tests | `make test PYTHON=.venv/bin/python` (or `.venv/bin/python -m pytest -q`) |
 | Lint + type check | `make lint PYTHON=.venv/bin/python` (`ruff check .` then `ty check`) |
-| Fuzz (quick pass) | `make fuzz PYTHON=.venv/bin/python` (2000 inputs, seed 0) |
+| Fuzz (quick pass) | `make fuzz PYTHON=.venv/bin/python` (2000 inputs, seed 0); `tools/fuzz.py --seed-dir DIR` mutates a corpus of your own |
 | Build sdist + wheel | `make package PYTHON=.venv/bin/python` |
 | Publish (manual only) | `make publish` / `make publish-test` |
 | CLI | `.venv/bin/purepdb <command> <file.pdb>` — `purepdb --help` lists all 15 |
-| llvm cross-check | `.venv/bin/python dev/validate_against_llvm.py` (needs `llvm-pdbutil`; skips cleanly without it) |
+| llvm cross-check | `.venv/bin/python dev/validate_against_llvm.py [pdb...]` (13 checks; needs `llvm-pdbutil`; skips cleanly without it) |
+| corpus audit | `.venv/bin/python dev/audit_corpus.py <dir>` (every listing over every file, escapes and undecoded kinds tallied) |
 | OMAP vs Windows | `.venv/bin/python dev/validate_omap_against_windows.py <dll-dir> --fetch` (needs Windows DLLs and network; nothing is redistributed) |
 
-Expected state on a clean tree: **583 tests pass**, `ruff check` and `ty check`
+Expected state on a clean tree: **636 tests pass**, `ruff check` and `ty check`
 both clean, and the fuzzer reports no escaped exception. Run tests, lint *and*
 a quick fuzz pass before considering work complete.
 

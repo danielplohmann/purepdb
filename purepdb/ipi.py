@@ -22,8 +22,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
-from .codeview import iter_records
-from .reader import Reader
+from .codeview import _RECORD_HEADER
 
 LF_FUNC_ID = 0x1601
 LF_MFUNC_ID = 0x1602
@@ -76,16 +75,33 @@ class IdTable:
 
         names: dict[int, str] = {}
         # Records are positional: the n'th record is index_begin + n, whether or
-        # not it is a kind we decode, so every record has to be walked.
-        for n, record in enumerate(iter_records(data[:end], header_size)):
-            if record.kind not in _NAMED_ID_KINDS:
-                continue
-            r = Reader(record.payload)
-            try:
-                r.u32()
-                if record.kind != LF_STRING_ID:
-                    r.u32()
-                names[index_begin + n] = r.cstring()
-            except EOFError:
-                continue  # shorter than the kind requires; skip it
+        # not it is a kind we decode, so every record has to be walked -- but
+        # only the three named kinds need their payload looked at. The walk is
+        # `codeview.iter_records`' (length, kind, payload; a short length ends
+        # it), written out here so the count covers every record while the
+        # slice and the decode happen only for the ones that carry a name:
+        # the IPI of a 355 MB node.pdb has 1.9 million records, and holding a
+        # RawRecord for each cost more than the walk.
+        unpack = _RECORD_HEADER.unpack_from
+        pos = header_size
+        n = index_begin
+        while end - pos >= 4:
+            rec_len, kind = unpack(data, pos)
+            if rec_len < 2:
+                break
+            body = pos + 4
+            payload_len = rec_len - 2
+            if end - body < payload_len:
+                break
+            if kind in _NAMED_ID_KINDS:
+                # ParentScope/ParentType and FunctionType for the function
+                # ids, Id alone for a string id; the name follows.
+                skip = 4 if kind == LF_STRING_ID else 8
+                name_at = body + skip
+                if name_at <= body + payload_len:
+                    nul = data.find(b"\x00", name_at, body + payload_len)
+                    if nul != -1:
+                        names[n] = data[name_at:nul].decode("utf-8", errors="replace")
+            pos = body + payload_len
+            n += 1
         return cls(names=names)

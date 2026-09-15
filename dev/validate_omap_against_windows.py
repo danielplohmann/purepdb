@@ -46,6 +46,23 @@ but about which address belongs to a name -- Win7 exports it through stubs, and
 the offsets cluster hard (146 at exactly +8 on x64, 175 at exactly +13 on x86),
 which is a calling convention rather than a translation error. A wrong
 translation does not produce the same delta 175 times.
+
+A second run in 2026-09, against images fetched from the symbol server rather
+than an installation, and with the stubs *followed* (see `follow_thunk`) and an
+export whose address the PDB names under another name counted as `alias`:
+
+    pair                   omap   common  exact  thunk  alias  near   far
+    win7-x86 kernel32     61182     1266    863    381     21     1     0
+    win7-x86 ntdll        67714     1959   1953      4      1     1     0
+    win7-x86 user32       38222      632    632      0      0     0     0
+    win10    kernel32         0      876    863     10      3     0     0
+    win11    ntdll            0     2458   2456      1      1     0     0
+    win11    ucrtbase         0     2480   2469      1     10     0     0
+
+    untranslated matches: 0 of 3857
+
+Zero `far` anywhere; the two `near` are an export pointing at a two-byte
+`mov eax,eax` pad before the `ret` the PDB names.
 """
 
 from __future__ import annotations
@@ -166,17 +183,54 @@ def check(image_path: Path, pdb_path: Path) -> dict | None:
                 untranslated.setdefault(key, raw)
 
     def follow_thunk(rva: int) -> int | None:
-        offset = _rva_to_file_offset(data, image, rva)
-        if offset is None or data[offset] != 0xE9:
-            return None
-        (delta,) = struct.unpack_from("<i", data, offset + 1)
-        return rva + 5 + delta
+        """Where the code at an export lands, through the stubs Win7 puts
+        in front of a function.
 
-    common = [(n, r) for n, r in image.exports.items() if n in translated]
+        Read off the bytes of Win7 x86 kernel32: an export points at
+        `mov edi,edi; push ebp; mov ebp,esp; pop ebp; jmp short +5`, five
+        nops, and then the function the PDB names, 13 bytes on -- the
+        hot-patchable prologue turned into a stub. Others point at a bare
+        `jmp short` over the padding (+7), or at a stub whose `jmp short`
+        goes *back* eleven bytes to the `jmp [import]` the PDB names.
+        Following the prologue-that-does-nothing and every short or near
+        jump, a few hops deep, lands on purepdb's address in each case;
+        that is what makes these a stub rather than a disagreement.
+        """
+        hotpatch_prologue = bytes.fromhex("8bff558bec5d")
+        for _hop in range(4):
+            offset = _rva_to_file_offset(data, image, rva)
+            if offset is None:
+                return None
+            if data[offset:offset + 6] == hotpatch_prologue:
+                offset += 6
+                rva += 6
+            op = data[offset]
+            if op == 0xE9:
+                (delta,) = struct.unpack_from("<i", data, offset + 1)
+                rva += 5 + delta
+            elif op == 0xEB:
+                (delta,) = struct.unpack_from("<b", data, offset + 1)
+                rva += 2 + delta
+            else:
+                return rva if _hop else None
+        return rva
+
+    # An export whose address purepdb names, but not by the exported name:
+    # Win7 kernel32 exports `Beep` at `_BeepImplementation@8` and puts
+    # `_Beep@8` elsewhere, 26 times over. The translation of that address is
+    # right, which is what is being checked; the name pairing is the
+    # linker's business.
+    named_at: set[int] = {fn.rva for fn in pdb.functions() if fn.rva is not None}
+
+    # A forwarded export (`api-ms-win-core-...`) is a string in the export
+    # directory, not code, and has no address to agree with.
+    export_dir = image.export_directory
+    common = [(n, r) for n, r in image.exports.items()
+              if n in translated and not (export_dir and export_dir[0] <= r < export_dir[1])]
     result = {"omap": diagnostics.omap_entries,
               "slot10": diagnostics.has_original_sections,
-              "common": len(common), "exact": 0, "thunk": 0, "near": 0,
-              "far": 0, "untranslated": 0,
+              "common": len(common), "exact": 0, "thunk": 0, "alias": 0,
+              "near": 0, "far": 0, "untranslated": 0,
               "deltas": collections.Counter()}
     for name, export_rva in common:
         got = translated[name]
@@ -184,6 +238,8 @@ def check(image_path: Path, pdb_path: Path) -> dict | None:
             result["exact"] += 1
         elif follow_thunk(export_rva) == got:
             result["thunk"] += 1
+        elif export_rva in named_at or follow_thunk(export_rva) in named_at:
+            result["alias"] += 1
         elif got is not None and abs(got - export_rva) <= NEAR:
             result["near"] += 1
             result["deltas"][got - export_rva] += 1
@@ -263,11 +319,11 @@ def main(argv: list[str]) -> int:
         return 1
 
     print(f"\n{'pair':28s} {'omap':>7s} {'common':>7s} {'exact':>6s} "
-          f"{'thunk':>6s} {'near':>5s} {'far':>5s}")
+          f"{'thunk':>6s} {'alias':>5s} {'near':>5s} {'far':>5s}")
     translated_common = translated_untranslated = 0
     for label, r in rows:
         print(f"{label:28s} {r['omap']:7d} {r['common']:7d} {r['exact']:6d} "
-              f"{r['thunk']:6d} {r['near']:5d} {r['far']:5d}")
+              f"{r['thunk']:6d} {r['alias']:5d} {r['near']:5d} {r['far']:5d}")
         if r["deltas"]:
             top = ", ".join(f"{d:+d}x{n}" for d, n in r["deltas"].most_common(3))
             print(f"{'':28s} near-miss offsets: {top}")

@@ -119,6 +119,11 @@ def _diagnose(pdb: PDB) -> None:
     from . import codeview
 
     d = pdb.diagnose()
+    major, minor = d.linker_version
+    version = f"{major}.{minor:02d}" if major else "not recorded"
+    notes = ["private symbols stripped"] if d.private_symbols_stripped else []
+    print(f"linker             : {version}"
+          f"{' (' + ', '.join(notes) + ')' if notes else ''}")
     print(f"modules            : {d.modules} "
           f"({d.modules_with_symbols} with symbols)")
     print(f"proc records       : {d.proc_records} "
@@ -135,7 +140,8 @@ def _diagnose(pdb: PDB) -> None:
             named.append(f"{d.unresolvable_proc_refs} unreadable")
         print(f"  index also names : {', '.join(named)}")
     print(f"public records     : {d.public_records}")
-    print(f"inline sites       : {d.inline_sites}")
+    print(f"inline sites       : {d.inline_sites}"
+          f"{f' ({d.unnamed_inline_sites} unnamed)' if d.unnamed_inline_sites else ''}")
     print(f"labels             : {d.labels}")
     if d.thread_local_records:
         print(f"thread-local recs  : {d.thread_local_records} "
@@ -361,6 +367,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     handler, noun, _columns = entry
+    pdb: PDB | None = None
     try:
         pdb = PDB.open(path)
         count = handler(pdb)
@@ -387,6 +394,9 @@ def main(argv: list[str]) -> int:
     except OSError as exc:
         _eprint(f"error: {_text(str(exc))}")
         return 1
+    finally:
+        if pdb is not None:
+            pdb.close()
     return 0
 
 
