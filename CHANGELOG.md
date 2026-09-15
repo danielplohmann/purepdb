@@ -14,6 +14,10 @@ resolve *differently* would be breaking, and would say so here.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.0] - 2026-09-15
+
 ### Added
 
 - `Diagnostics.c13_truncations` records where and why a C13 line-info walk
@@ -450,7 +454,8 @@ resolve *differently* would be breaking, and would say so here.
 The first release documented here. See the repository history for what it
 contained; entries above describe changes made since it.
 
-[Unreleased]: https://github.com/danielplohmann/purepdb/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/danielplohmann/purepdb/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/danielplohmann/purepdb/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/danielplohmann/purepdb/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/danielplohmann/purepdb/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/danielplohmann/purepdb/compare/v0.2.0...v0.3.0
