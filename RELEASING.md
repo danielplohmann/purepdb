@@ -118,6 +118,13 @@ version before it goes out. Pushing the tag starts the real run, and a required 
 `pypi` environment holds it at the publish job; rehearse from the same tag while it waits, then
 approve it, or reject it and leave the version number unused.
 
+That works only because the workflow's concurrency group carries the trigger as well as the ref.
+Both runs are on the same tag, so a group keyed on the ref alone queues the rehearsal behind a
+run that is parked waiting for a human, and it never starts — the paragraph above described a
+procedure the workflow did not permit until `github.event_name` was added to the group. Two real
+publishes of one tag are both pushes, share a group, and still serialise, which is the reason the
+group exists at all.
+
 ## When a release fails
 
 - **A gate failed before anything was published** (tag/version mismatch, missing changelog section,
