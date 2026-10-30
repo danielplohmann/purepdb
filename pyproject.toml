@@ -59,7 +59,7 @@ purepdb = "purepdb.__main__:cli"
 dev = [
     "build==1.6.0",
     "hatchling==1.32.0",  # so `make package` can use --no-isolation
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "ruff==0.16.6",
     "ty==0.0.80",
     "twine==7.0.0",
