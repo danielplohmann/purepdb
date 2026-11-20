@@ -61,7 +61,7 @@ dev = [
     "hatchling==1.33.0",  # so `make package` can use --no-isolation
     "pytest==9.2.0",
     "ruff==0.17.5",
-    "ty==0.0.92",
+    "ty==0.0.105",
     "twine==7.0.0",
 ]
 
